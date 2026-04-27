@@ -1,0 +1,23 @@
+# Editor / OS
+.DS_Store
+Thumbs.db
+*.swp
+*~
+
+# IDE / herramientas locales
+.vscode/
+.idea/
+.claude/
+
+# Logs
+*.log
+npm-debug.log*
+
+# Archivos temporales del usuario / muestras
+*.xls.bak
+~$*
+
+# Distribuciones / build (cuando se agreguen)
+dist/
+build/
+node_modules/

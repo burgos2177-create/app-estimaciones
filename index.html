@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Estimaciones de Obra</title>
+  <link rel="stylesheet" href="css/main.css" />
+  <script src="https://cdn.sheetjs.com/xlsx-0.20.2/package/dist/xlsx.full.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/jspdf-autotable@3.8.2/dist/jspdf.plugin.autotable.min.js"></script>
+</head>
+<body>
+  <div id="app"></div>
+  <div id="modal-root"></div>
+  <div id="toast-root"></div>
+  <script type="module">
+    // Cache-bust dinámico en dev. El src con ?v=timestamp obliga al navegador
+    // a re-evaluar el grafo de módulos cada vez que cargas la página.
+    const v = Date.now();
+    import('./js/main.js?v=' + v);
+  </script>
+</body>
+</html>
