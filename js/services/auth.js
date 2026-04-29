@@ -1,8 +1,8 @@
 import {
   signInWithEmailAndPassword, signOut, onAuthStateChanged
 } from 'https://www.gstatic.com/firebasejs/10.13.2/firebase-auth.js';
-import { ref, get, set, update } from 'https://www.gstatic.com/firebasejs/10.13.2/firebase-database.js';
-import { auth, db, firebaseConfig } from './firebase.js';
+import { auth, firebaseConfig } from './firebase.js';
+import { rread, rset, rupdate } from './db.js';
 
 // Para crear usuarios sin backend: usamos la REST API de Firebase Auth con la apiKey pública.
 // Esto permite al admin (logueado) crear cuentas directamente desde el navegador.
@@ -19,13 +19,11 @@ export function logout() { return signOut(auth); }
 export function onAuth(cb) { return onAuthStateChanged(auth, cb); }
 
 export async function getUserProfile(uid) {
-  const snap = await get(ref(db, `users/${uid}`));
-  return snap.exists() ? snap.val() : null;
+  return await rread(`users/${uid}`);
 }
 
 export async function createUser({ email, password, displayName, role = 'ingeniero' }) {
-  // Hace signUp directo via REST. NO cambia la sesión actual del admin si usamos returnSecureToken=false? Sí cambia.
-  // Truco: hacemos signUp sin tocar el SDK, así no cambia la sesión del admin.
+  // Hace signUp directo via REST. Así no cambia la sesión del admin que está logueado.
   const r = await fetch(`${REST}:signUp?key=${firebaseConfig.apiKey}`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ email, password, returnSecureToken: false })
@@ -33,7 +31,7 @@ export async function createUser({ email, password, displayName, role = 'ingenie
   const data = await r.json();
   if (!r.ok) throw new Error(data?.error?.message || 'Error creando usuario');
   const uid = data.localId;
-  await set(ref(db, `users/${uid}`), {
+  await rset(`users/${uid}`, {
     email, displayName: displayName || email,
     role, createdAt: Date.now()
   });
@@ -41,14 +39,13 @@ export async function createUser({ email, password, displayName, role = 'ingenie
 }
 
 export async function updateUserRole(uid, role) {
-  await update(ref(db, `users/${uid}`), { role });
+  await rupdate(`users/${uid}`, { role });
 }
 
 export async function setUserAssignment(uid, obraId, assigned) {
-  await set(ref(db, `users/${uid}/obrasAsignadas/${obraId}`), assigned ? true : null);
+  await rset(`users/${uid}/obrasAsignadas/${obraId}`, assigned ? true : null);
 }
 
 export async function listUsers() {
-  const snap = await get(ref(db, 'users'));
-  return snap.exists() ? snap.val() : {};
+  return (await rread('users')) || {};
 }

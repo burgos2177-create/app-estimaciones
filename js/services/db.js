@@ -2,19 +2,36 @@ import {
   ref, get, set, update, push, remove, onValue, off, child
 } from 'https://www.gstatic.com/firebasejs/10.13.2/firebase-database.js';
 import { db } from './firebase.js';
+import { APP_BASE_PATH } from '../config/firebase-config.js';
+
+// Prefija toda path relativa con APP_BASE_PATH (e.g. "obras/X" → "legacy/estimaciones/obras/X").
+// Para escapes que necesiten path absoluto en el RTDB compartido (p.ej. /shared/buzon),
+// pasar el path comenzando con "/" y se interpretará como absoluto, sin prefijo.
+function _resolve(path) {
+  if (typeof path !== 'string') throw new Error('path debe ser string');
+  if (path.startsWith('/')) return path.slice(1);    // absoluto
+  return APP_BASE_PATH ? `${APP_BASE_PATH}/${path}` : path;
+}
+
+// Helper público: devuelve el path absoluto resuelto (para componer paths como
+// `obras/${id}/algo` y luego usarlos con set(ref(db, ...)) directamente).
+export function appPath(relPath) { return _resolve(relPath); }
+
+// ref helper que respeta APP_BASE_PATH
+function _ref(path) { return ref(db, _resolve(path)); }
 
 export function rread(path) {
-  return get(ref(db, path)).then(s => s.exists() ? s.val() : null);
+  return get(_ref(path)).then(s => s.exists() ? s.val() : null);
 }
-export function rset(path, val) { return set(ref(db, path), val); }
-export function rupdate(path, patch) { return update(ref(db, path), patch); }
+export function rset(path, val) { return set(_ref(path), val); }
+export function rupdate(path, patch) { return update(_ref(path), patch); }
 export function rpush(path, val) {
-  const r = push(ref(db, path));
+  const r = push(_ref(path));
   return set(r, val).then(() => r.key);
 }
-export function rremove(path) { return remove(ref(db, path)); }
+export function rremove(path) { return remove(_ref(path)); }
 export function rwatch(path, cb) {
-  const r = ref(db, path);
+  const r = _ref(path);
   const handler = onValue(r, s => cb(s.exists() ? s.val() : null));
   return () => off(r, 'value', handler);
 }
@@ -36,7 +53,7 @@ export async function listObrasForUser(user) {
 }
 
 export async function createObra(meta, ownerUid) {
-  const r = push(ref(db, 'obras'));
+  const r = push(_ref('obras'));
   const obra = {
     meta: {
       nombre: meta.nombre || 'Sin nombre',
@@ -63,17 +80,17 @@ export async function createObra(meta, ownerUid) {
 
 export async function updateObraMeta(obraId, patch) {
   patch.updatedAt = Date.now();
-  await update(ref(db, `obras/${obraId}/meta`), patch);
+  await update(_ref(`obras/${obraId}/meta`), patch);
 }
 
 export async function deleteObra(obraId) {
-  await remove(ref(db, `obras/${obraId}`));
+  await remove(_ref(`obras/${obraId}`));
 }
 
 // === Catálogo OPUS ===
 export async function saveCatalogo(obraId, catalogo) {
   // catalogo = { sourceFileName, importedAt, conceptos: { id → concepto } }
-  await set(ref(db, `obras/${obraId}/catalogo`), catalogo);
+  await set(_ref(`obras/${obraId}/catalogo`), catalogo);
 }
 
 export async function reconcileCatalogo(obraId, nuevosConceptos, sourceFileName) {
@@ -148,7 +165,7 @@ export async function reconcileCatalogo(obraId, nuevosConceptos, sourceFileName)
     }
   }
 
-  await set(ref(db, `obras/${obraId}/catalogo`), {
+  await set(_ref(`obras/${obraId}/catalogo`), {
     sourceFileName,
     importedAt: Date.now(),
     conceptos: merged
@@ -157,7 +174,7 @@ export async function reconcileCatalogo(obraId, nuevosConceptos, sourceFileName)
 }
 
 export async function setPlantillaConcepto(obraId, conceptoId, plantillaTipo, plantillaConfig = null) {
-  await update(ref(db, `obras/${obraId}/catalogo/conceptos/${conceptoId}`), {
+  await update(_ref(`obras/${obraId}/catalogo/conceptos/${conceptoId}`), {
     plantillaTipo, plantillaConfig
   });
 }
@@ -166,7 +183,7 @@ export async function setPlantillaConcepto(obraId, conceptoId, plantillaTipo, pl
 export async function createEstimacion(obraId, data) {
   const all = await rread(`obras/${obraId}/estimaciones`) || {};
   const numero = Math.max(0, ...Object.values(all).map(e => e.numero || 0)) + 1;
-  const r = push(ref(db, `obras/${obraId}/estimaciones`));
+  const r = push(_ref(`obras/${obraId}/estimaciones`));
   await set(r, {
     numero,
     fechaCorte: data.fechaCorte || Date.now(),
@@ -179,12 +196,12 @@ export async function createEstimacion(obraId, data) {
 }
 
 export async function cerrarEstimacion(obraId, estimId, uid) {
-  await update(ref(db, `obras/${obraId}/estimaciones/${estimId}`), {
+  await update(_ref(`obras/${obraId}/estimaciones/${estimId}`), {
     estado: 'cerrada', cerradaAt: Date.now(), cerradaPor: uid
   });
 }
 export async function reabrirEstimacion(obraId, estimId) {
-  await update(ref(db, `obras/${obraId}/estimaciones/${estimId}`), {
+  await update(_ref(`obras/${obraId}/estimaciones/${estimId}`), {
     estado: 'borrador', cerradaAt: null, cerradaPor: null
   });
 }
@@ -194,15 +211,15 @@ export async function createGenerador(obraId, data) {
   const all = await rread(`obras/${obraId}/generadores`) || {};
   const inEstim = Object.values(all).filter(g => g.estimacionId === data.estimacionId);
   const numero = Math.max(0, ...inEstim.map(g => g.numero || 0)) + 1;
-  const r = push(ref(db, `obras/${obraId}/generadores`));
+  const r = push(_ref(`obras/${obraId}/generadores`));
   await set(r, { numero, ...data, createdAt: Date.now(), updatedAt: Date.now() });
   return r.key;
 }
 export async function saveGenerador(obraId, gid, data) {
-  await update(ref(db, `obras/${obraId}/generadores/${gid}`), { ...data, updatedAt: Date.now() });
+  await update(_ref(`obras/${obraId}/generadores/${gid}`), { ...data, updatedAt: Date.now() });
 }
 export async function setAvance(obraId, conceptoId, estimacionId, cantidad) {
-  await set(ref(db, `obras/${obraId}/avances/${conceptoId}/${estimacionId}`), Number(cantidad) || 0);
+  await set(_ref(`obras/${obraId}/avances/${conceptoId}/${estimacionId}`), Number(cantidad) || 0);
 }
 
 // === Adjuntos del generador (croquis y fotos) ===
@@ -212,24 +229,24 @@ export async function addGeneradorAttachment(obraId, gid, kind, attachment) {
   const cur = await rread(path) || [];
   const list = Array.isArray(cur) ? cur : Object.values(cur);
   list.push(attachment);
-  await set(ref(db, path), list);
+  await set(_ref(path), list);
   return list;
 }
 export async function removeGeneradorAttachment(obraId, gid, kind, driveId) {
   const path = `obras/${obraId}/generadores/${gid}/${kind}`;
   const cur = await rread(path) || [];
   const list = (Array.isArray(cur) ? cur : Object.values(cur)).filter(a => a.driveId !== driveId);
-  await set(ref(db, path), list);
+  await set(_ref(path), list);
   return list;
 }
 
 export async function setPagoCliente(obraId, estimId, pago) {
-  await set(ref(db, `obras/${obraId}/estimaciones/${estimId}/pagoCliente`), pago);
+  await set(_ref(`obras/${obraId}/estimaciones/${estimId}/pagoCliente`), pago);
 }
 
 // === Subcontratos ===
 export async function createSubcontrato(obraId, data) {
-  const r = push(ref(db, `obras/${obraId}/subcontratos`));
+  const r = push(_ref(`obras/${obraId}/subcontratos`));
   await set(r, {
     meta: {
       nombre: data.nombre || 'Subcontrato',
@@ -246,19 +263,19 @@ export async function createSubcontrato(obraId, data) {
 }
 export async function updateSubcontratoMeta(obraId, subId, patch) {
   patch.updatedAt = Date.now();
-  await update(ref(db, `obras/${obraId}/subcontratos/${subId}/meta`), patch);
+  await update(_ref(`obras/${obraId}/subcontratos/${subId}/meta`), patch);
 }
 export async function setSubcontratoConceptos(obraId, subId, conceptos) {
-  await set(ref(db, `obras/${obraId}/subcontratos/${subId}/conceptos`), conceptos);
-  await update(ref(db, `obras/${obraId}/subcontratos/${subId}/meta`), { updatedAt: Date.now() });
+  await set(_ref(`obras/${obraId}/subcontratos/${subId}/conceptos`), conceptos);
+  await update(_ref(`obras/${obraId}/subcontratos/${subId}/meta`), { updatedAt: Date.now() });
 }
 export async function deleteSubcontrato(obraId, subId) {
-  await remove(ref(db, `obras/${obraId}/subcontratos/${subId}`));
+  await remove(_ref(`obras/${obraId}/subcontratos/${subId}`));
 }
 
 // === Licitantes ===
 export async function addLicitante(obraId, subId, data) {
-  const r = push(ref(db, `obras/${obraId}/subcontratos/${subId}/licitantes`));
+  const r = push(_ref(`obras/${obraId}/subcontratos/${subId}/licitantes`));
   await set(r, {
     nombre: data.nombre || 'Licitante',
     email: data.email || '',
@@ -272,21 +289,21 @@ export async function addLicitante(obraId, subId, data) {
   return r.key;
 }
 export async function updateLicitante(obraId, subId, licId, patch) {
-  await update(ref(db, `obras/${obraId}/subcontratos/${subId}/licitantes/${licId}`), patch);
+  await update(_ref(`obras/${obraId}/subcontratos/${subId}/licitantes/${licId}`), patch);
 }
 export async function setLicitantePrecio(obraId, subId, licId, conceptoId, precio) {
-  await set(ref(db, `obras/${obraId}/subcontratos/${subId}/licitantes/${licId}/precios/${conceptoId}`), Number(precio) || 0);
+  await set(_ref(`obras/${obraId}/subcontratos/${subId}/licitantes/${licId}/precios/${conceptoId}`), Number(precio) || 0);
 }
 export async function setLicitantePrecios(obraId, subId, licId, precios) {
-  await set(ref(db, `obras/${obraId}/subcontratos/${subId}/licitantes/${licId}/precios`), precios);
+  await set(_ref(`obras/${obraId}/subcontratos/${subId}/licitantes/${licId}/precios`), precios);
 }
 export async function deleteLicitante(obraId, subId, licId) {
-  await remove(ref(db, `obras/${obraId}/subcontratos/${subId}/licitantes/${licId}`));
+  await remove(_ref(`obras/${obraId}/subcontratos/${subId}/licitantes/${licId}`));
 }
 
 // === Adjudicación + estimaciones del subcontratista ===
 export async function adjudicarSubcontrato(obraId, subId, licId) {
-  await update(ref(db, `obras/${obraId}/subcontratos/${subId}/meta`), {
+  await update(_ref(`obras/${obraId}/subcontratos/${subId}/meta`), {
     estado: 'adjudicado',
     licitanteAdjudicadoId: licId,
     adjudicadoAt: Date.now(),
@@ -294,7 +311,7 @@ export async function adjudicarSubcontrato(obraId, subId, licId) {
   });
 }
 export async function desadjudicarSubcontrato(obraId, subId) {
-  await update(ref(db, `obras/${obraId}/subcontratos/${subId}/meta`), {
+  await update(_ref(`obras/${obraId}/subcontratos/${subId}/meta`), {
     estado: 'cotizando',
     licitanteAdjudicadoId: null,
     adjudicadoAt: null,
@@ -305,7 +322,7 @@ export async function desadjudicarSubcontrato(obraId, subId) {
 export async function createSubEstimacion(obraId, subId, data) {
   const all = await rread(`obras/${obraId}/subcontratos/${subId}/estimaciones`) || {};
   const numero = Math.max(0, ...Object.values(all).map(e => e.numero || 0)) + 1;
-  const r = push(ref(db, `obras/${obraId}/subcontratos/${subId}/estimaciones`));
+  const r = push(_ref(`obras/${obraId}/subcontratos/${subId}/estimaciones`));
   await set(r, {
     numero,
     fechaCorte: data.fechaCorte || Date.now(),
@@ -319,21 +336,21 @@ export async function createSubEstimacion(obraId, subId, data) {
   return r.key;
 }
 export async function setSubEstimacionAvance(obraId, subId, estId, conceptoId, cantidad) {
-  await set(ref(db, `obras/${obraId}/subcontratos/${subId}/estimaciones/${estId}/avances/${conceptoId}`), Number(cantidad) || 0);
+  await set(_ref(`obras/${obraId}/subcontratos/${subId}/estimaciones/${estId}/avances/${conceptoId}`), Number(cantidad) || 0);
 }
 export async function cerrarSubEstimacion(obraId, subId, estId, uid) {
-  await update(ref(db, `obras/${obraId}/subcontratos/${subId}/estimaciones/${estId}`), {
+  await update(_ref(`obras/${obraId}/subcontratos/${subId}/estimaciones/${estId}`), {
     estado: 'cerrada', cerradaAt: Date.now(), cerradaPor: uid
   });
 }
 export async function reabrirSubEstimacion(obraId, subId, estId) {
-  await update(ref(db, `obras/${obraId}/subcontratos/${subId}/estimaciones/${estId}`), {
+  await update(_ref(`obras/${obraId}/subcontratos/${subId}/estimaciones/${estId}`), {
     estado: 'borrador', cerradaAt: null, cerradaPor: null
   });
 }
 export async function setPagoSub(obraId, subId, estId, pago) {
-  await set(ref(db, `obras/${obraId}/subcontratos/${subId}/estimaciones/${estId}/pagoSub`), pago);
+  await set(_ref(`obras/${obraId}/subcontratos/${subId}/estimaciones/${estId}/pagoSub`), pago);
 }
 export async function deleteSubEstimacion(obraId, subId, estId) {
-  await remove(ref(db, `obras/${obraId}/subcontratos/${subId}/estimaciones/${estId}`));
+  await remove(_ref(`obras/${obraId}/subcontratos/${subId}/estimaciones/${estId}`));
 }
