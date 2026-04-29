@@ -4,7 +4,7 @@
 
 import { h, modal, toast } from '../util/dom.js';
 import { renderShell } from './shell.js';
-import { rread, setPagoCliente } from '../services/db.js';
+import { rread, setPagoCliente, getObraLinks, listBuzonItems, pushBuzonItem, updateBuzonItem } from '../services/db.js';
 import { state } from '../state/store.js';
 import { money, num, dateMx, pct } from '../util/format.js';
 import { buildResumenData, exportResumenPdf, exportResumenXlsx, exportEstimacionJson } from '../services/export.js';
@@ -230,20 +230,71 @@ async function editPagoDialog(obraId, estId, est, ivaPct) {
 
   return await modal({
     title: `Pago cliente — Estimación #${est.numero}`,
-    body, confirmLabel: 'Guardar',
+    body, confirmLabel: 'Guardar y enviar al contador',
     onConfirm: async () => {
       try {
-        await setPagoCliente(obraId, estId, {
+        const pago = {
           subtotal: Number(subtotalIn.value) || 0,
           iva: Number(ivaIn.value) || 0,
           importe: Number(importeIn.value) || 0,
           fecha: fechaIn.value ? new Date(fechaIn.value).getTime() : Date.now()
-        });
-        toast('Pago guardado', 'ok');
+        };
+        // 1) Guarda el pago localmente en la estimación (igual que antes)
+        await setPagoCliente(obraId, estId, pago);
+
+        // 2) Escribe (o actualiza) item del buzón para que el contador apruebe
+        await sincronizarConBuzon(obraId, estId, est, pago);
+
+        toast('Pago guardado y enviado al buzón del contador', 'ok');
         return true;
-      } catch (err) { toast('Error: ' + err.message, 'danger'); return false; }
+      } catch (err) {
+        console.error(err);
+        toast('Error: ' + err.message, 'danger');
+        return false;
+      }
     }
   });
+}
+
+async function sincronizarConBuzon(obraId, estId, est, pago) {
+  // Lee link de obra → proyecto contable y nombre de obra para el snapshot
+  const [links, obraMeta] = await Promise.all([
+    getObraLinks(),
+    rread(`obras/${obraId}/meta`)
+  ]);
+  const proyectoId = links?.[obraId] || null;
+  const obraNombre = obraMeta?.nombre || '';
+
+  // Busca si ya hay un item PENDIENTE para esta estimación. Si sí, lo actualiza.
+  const items = await listBuzonItems();
+  const existing = Object.entries(items).find(([_, it]) =>
+    it?.tipo === 'pago_cliente' &&
+    it?.obraId === obraId &&
+    it?.estimId === estId &&
+    it?.estado === 'pendiente'
+  );
+
+  const payload = {
+    tipo: 'pago_cliente',
+    origenApp: 'estimaciones',
+    obraId,
+    obraNombre,
+    proyectoId,
+    estimId: estId,
+    estimNumero: est.numero,
+    monto: pago,
+    fecha: pago.fecha,
+    descripcion: `Pago de estimación #${est.numero}${proyectoId ? '' : ' (obra sin vincular a proyecto contable)'}`,
+    estado: 'pendiente',
+    creadoPor: state.user?.uid || ''
+  };
+
+  if (existing) {
+    const [itemId] = existing;
+    await updateBuzonItem(itemId, { ...payload, actualizadoAt: Date.now() });
+  } else {
+    await pushBuzonItem(payload);
+  }
 }
 
 async function printConfigDialog(obra, estId, formato) {

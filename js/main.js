@@ -7,6 +7,7 @@ import { renderObrasList } from './views/obras.js';
 import { renderObra } from './views/obra.js';
 import { renderCatalogo } from './views/catalogo.js';
 import { renderAdmin } from './views/admin.js';
+import { renderVincularObras } from './views/vincular-obras.js';
 import { renderEstimaciones } from './views/estimaciones.js';
 import { renderEstimacion } from './views/estimacion.js';
 import { renderGenerador } from './views/generador.js';
@@ -21,6 +22,7 @@ import { h, mount } from './util/dom.js';
 
 route('/',                                                       () => renderObrasList());
 route('/admin',                                                  () => renderAdmin());
+route('/admin/vincular-obras',                                   () => renderVincularObras());
 route('/obras/:id',                                              renderObra);
 route('/obras/:id/catalogo',                                     renderCatalogo);
 route('/obras/:id/conceptos/:cid',                               renderConcepto);

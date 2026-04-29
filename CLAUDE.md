@@ -9,11 +9,11 @@ App web para el ingeniero de campo. Sister app de **SOGRUB Bitácora Financiera*
 - Google Drive API para imágenes de croquis (carpeta aparte por obra)
 - jsPDF (CDN) para exportar reportes
 
-## Decisiones de producto (2026-04-25)
+## Decisiones de producto (2026-04-25, actualizadas 2026-04-29)
 
-1. Firebase **aislado** del proyecto del contador (mismo Google account, proyecto distinto).
+1. ~~Firebase **aislado** del proyecto del contador~~ → **REVOCADA 2026-04-29**: Firebase **unificado** en proyecto `sogrub-suite`. La app de estimaciones vive bajo `/legacy/estimaciones/*` y la bitácora bajo `/legacy/bitacora/*`. Ambas comparten Auth (mismo UID admin) y reglas centralizadas. Razón: a 4 apps a futuro (estimaciones, bitácora, compras, materiales), dual-SDK escala mal. Detalles en `memory/project_integration_vision.md`.
 2. Roles: `admin` (crea usuarios y obras, asigna obras a usuarios) y `ingeniero` (solo ve sus obras asignadas, captura generadores y estimaciones).
-3. Vínculo con app hermana: **export manual JSON** de estimaciones cerradas.
+3. ~~Vínculo con app hermana: **export manual JSON**~~ → **EVOLUCIONADA 2026-04-29**: apps interconectadas vía **buzón de aprobación** en `/shared/buzon`. Estimaciones cobradas → buzón → contador aprueba → se vuelve `abono_cliente`. Estimaciones a subcontratistas → buzón → contador aprueba → se vuelve `gasto`. Numeración global con counter atómico por obra al aprobar. Export JSON sigue funcionando como fallback.
 4. Plantillas de medición fijas, **se ligan al concepto la primera vez** que se le registra un generador. Tipos:
    - `areas` — eje, tramo, largo, ancho → total = L×A
    - `volumenes` — eje, tramo, largo, ancho, alto → total = L×A×H

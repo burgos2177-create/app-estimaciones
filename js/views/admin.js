@@ -17,10 +17,20 @@ export async function renderAdmin() {
   const usersBlock = renderUsersBlock(users, obras);
   const obrasBlock = renderObrasBlock(obras);
 
+  const integracionBlock = h('div', { class: 'card' }, [
+    h('h3', {}, 'Integración con bitácora'),
+    h('div', { class: 'row' }, [
+      h('div', { class: 'muted', style: { fontSize: '12px' } }, 'Pareo de obras con proyectos contables. Necesario para que los pagos cliente y estimaciones a subcontratistas se enruten al proyecto correcto en la bitácora.'),
+      h('div', { style: { flex: 1 } }),
+      h('button', { class: 'btn primary', onClick: () => navigate('/admin/vincular-obras') }, 'Vincular obras ↔ proyectos')
+    ])
+  ]);
+
   renderShell([{ label: 'Obras', to: '/' }, { label: 'Admin' }], h('div', {}, [
     h('h1', {}, 'Administración'),
     usersBlock,
-    obrasBlock
+    obrasBlock,
+    integracionBlock
   ]));
 }
 

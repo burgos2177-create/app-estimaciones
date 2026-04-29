@@ -222,6 +222,39 @@ export async function setAvance(obraId, conceptoId, estimacionId, cantidad) {
   await set(_ref(`obras/${obraId}/avances/${conceptoId}/${estimacionId}`), Number(cantidad) || 0);
 }
 
+// === Cross-app: vínculos obra ↔ proyecto y lectura de bitácora ===
+// Estos paths viven en /shared/* o /legacy/bitacora/* — no bajo APP_BASE_PATH.
+// Por eso usamos paths absolutos (con "/" inicial) que el _resolve respeta.
+
+export async function getObraLinks() {
+  return (await rread('/shared/obraLinks')) || {};
+}
+export async function setObraLink(obraId, proyectoId) {
+  if (!proyectoId) return rremove(`/shared/obraLinks/${obraId}`);
+  return rset(`/shared/obraLinks/${obraId}`, proyectoId);
+}
+export async function getProyectosBitacora() {
+  // Bitácora guarda proyectos como array (no objeto)
+  const arr = await rread('/legacy/bitacora/sogrub_proyectos');
+  if (!arr) return [];
+  return Array.isArray(arr) ? arr : Object.values(arr);
+}
+
+// === Buzón cross-app ===
+// /shared/buzon/{itemId}: { tipo, origenApp, obraId, proyectoId, ..., estado }
+export async function pushBuzonItem(item) {
+  return rpush('/shared/buzon', { ...item, creadoAt: Date.now() });
+}
+export async function listBuzonItems() {
+  return (await rread('/shared/buzon')) || {};
+}
+export async function updateBuzonItem(itemId, patch) {
+  return rupdate(`/shared/buzon/${itemId}`, patch);
+}
+export async function removeBuzonItem(itemId) {
+  return rremove(`/shared/buzon/${itemId}`);
+}
+
 // === Adjuntos del generador (croquis y fotos) ===
 export async function addGeneradorAttachment(obraId, gid, kind, attachment) {
   // kind: 'croquis' | 'fotos'
