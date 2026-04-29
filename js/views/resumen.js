@@ -33,17 +33,24 @@ export async function renderResumen({ params }) {
 
   const queryEst = new URLSearchParams(location.hash.split('?')[1] || '').get('est');
   let activeEstId = queryEst && ests[queryEst] ? queryEst : estsArr[estsArr.length - 1].id;
-  draw(obraId, obra, activeEstId);
+  await draw(obraId, obra, activeEstId);
 }
 
-function draw(obraId, obra, estId) {
+async function draw(obraId, obra, estId) {
+  // Buzón state para esta estimación (para badges y bloqueo de edición)
+  let buzonItems = {};
+  try { buzonItems = await listBuzonItems(); } catch {}
+  const buzonItem = Object.values(buzonItems).find(it =>
+    it?.tipo === 'pago_cliente' && it?.obraId === obraId && it?.estimId === estId
+  );
+  const buzonEstado = buzonItem?.estado || null;
   const m = obra.meta || {};
   const ests = obra.estimaciones || {};
   const estsArr = Object.entries(ests).map(([id, e]) => ({ id, ...e })).sort((a, b) => (a.numero || 0) - (b.numero || 0));
   const data = buildResumenData(obra, estId);
   const { est, ivaPct, anticipoPct, rows, subtotalEsta, ivaEsta, importeEsta, avPond, importeAcumEjec, importeAcumEjecCIVA, subtotalPagado, ivaPagado, importePagado, diferencia, diferenciaPct, anticipoMontoBase, amortizacionEsta, amortizacionAcum, saldoAnticipoPorAmortizar, netoEsta, netoAcum } = data;
 
-  const estSel = h('select', { onchange: e => draw(obraId, obra, e.target.value) },
+  const estSel = h('select', { onchange: e => { draw(obraId, obra, e.target.value); } },
     estsArr.map(es => h('option', { value: es.id, selected: es.id === estId }, `Estimación #${es.numero}`)));
 
   const head = h('div', { class: 'row' }, [
@@ -59,7 +66,13 @@ function draw(obraId, obra, estId) {
 
   const editable = est.estado === 'borrador' || state.user.role === 'admin';
   const editPagosBtn = editable
-    ? h('button', { class: 'btn sm ghost', onClick: async () => { const ok = await editPagoDialog(obraId, estId, est, ivaPct); if (ok) renderResumen({ params: { id: obraId } }); } }, '✎ Editar pago')
+    ? h('button', { class: 'btn sm ghost', onClick: async () => { const ok = await editPagoDialog(obraId, estId, est, ivaPct); if (ok) renderResumen({ params: { id: obraId } }); } },
+      buzonEstado === 'aprobado' ? '🔒 Ver pago' : '✎ Editar pago')
+    : null;
+  const buzonBadge =
+    buzonEstado === 'pendiente' ? h('span', { class: 'tag warn', style: { marginLeft: '6px' }, title: 'El contador todavía no aprueba este pago en bitácora.' }, '⏳ Esperando aprobación')
+    : buzonEstado === 'aprobado' ? h('span', { class: 'tag ok', style: { marginLeft: '6px' }, title: buzonItem?.aprobadoAt ? 'Aprobado el ' + new Date(buzonItem.aprobadoAt).toLocaleString('es-MX') : 'Aprobado por el contador' }, '✓ Aprobado por contador')
+    : buzonEstado === 'rechazado' ? h('span', { class: 'tag danger', style: { marginLeft: '6px' }, title: buzonItem?.comentarioRechazo ? 'Motivo: ' + buzonItem.comentarioRechazo : 'Rechazado por el contador' }, '✕ Rechazado')
     : null;
 
   // Bloque de anticipo (solo si > 0)
@@ -108,7 +121,7 @@ function draw(obraId, obra, estId) {
     ]));
   }
   ecBodyRows.push(h('tr', {}, [
-    h('td', {}, ['Pagos cliente (acumulado) ', editPagosBtn]),
+    h('td', {}, ['Pagos cliente (acumulado) ', editPagosBtn, buzonBadge]),
     h('td', { class: 'num' }, money(subtotalPagado)),
     h('td', { class: 'num muted' }, money(ivaPagado)),
     h('td', { class: 'num' }, h('b', {}, money(importePagado)))
@@ -196,6 +209,46 @@ function crumbs(obraId, nombre) {
 }
 
 async function editPagoDialog(obraId, estId, est, ivaPct) {
+  // Si el pago ya fue aprobado por el contador en bitácora, NO se puede editar
+  // desde estimaciones (evita inconsistencia con el movimiento contable creado).
+  // Para correcciones reales, el contador edita en bitácora o rechaza el buzón.
+  const items = await listBuzonItems();
+  const aprobado = Object.entries(items).find(([_, it]) =>
+    it?.tipo === 'pago_cliente' &&
+    it?.obraId === obraId &&
+    it?.estimId === estId &&
+    it?.estado === 'aprobado'
+  );
+
+  if (aprobado) {
+    const [, it] = aprobado;
+    const fechaApr = it.aprobadoAt ? new Date(it.aprobadoAt).toLocaleString('es-MX') : 'fecha desconocida';
+    await modal({
+      title: `Pago — Estimación #${est.numero} (aprobado)`,
+      body: h('div', {}, [
+        h('div', { class: 'card', style: { background: 'rgba(93,211,158,0.08)', borderColor: 'var(--ok)', padding: '12px', marginTop: 0 } }, [
+          h('div', { class: 'tag ok', style: { marginBottom: '8px' } }, '🔒 Aprobado por el contador'),
+          h('div', { style: { fontSize: '13px', marginBottom: '8px' } }, `Aprobado el ${fechaApr}.`),
+          h('div', { class: 'muted', style: { fontSize: '12px' } }, 'Para hacer cualquier cambio en este pago, debe gestionarse del lado de la app contadora (SOGRUB Bitácora). Desde aquí no se puede editar para evitar que los datos queden desincronizados con el movimiento ya registrado.')
+        ]),
+        h('div', { class: 'grid-2', style: { marginTop: '14px' } }, [
+          h('div', { class: 'field' }, [h('label', {}, 'Subtotal'), h('div', { class: 'mono' }, money(it.monto?.subtotal || 0))]),
+          h('div', { class: 'field' }, [h('label', {}, 'IVA'), h('div', { class: 'mono' }, money(it.monto?.iva || 0))])
+        ]),
+        h('div', { class: 'grid-2', style: { marginTop: '8px' } }, [
+          h('div', { class: 'field' }, [h('label', {}, 'Importe'), h('div', { class: 'mono', style: { color: 'var(--accent)', fontWeight: 600 } }, money(it.monto?.importe || 0))]),
+          h('div', { class: 'field' }, [h('label', {}, 'Fecha del pago'), h('div', {}, it.fecha ? dateMx(it.fecha) : '—')])
+        ]),
+        it.movId && h('div', { class: 'muted', style: { fontSize: '11px', marginTop: '12px' } }, [
+          'ID del movimiento contable: ', h('code', {}, it.movId)
+        ])
+      ]),
+      confirmLabel: 'Cerrar', cancelLabel: '',
+      onConfirm: () => true
+    });
+    return false;
+  }
+
   const cur = est.pagoCliente || { subtotal: 0, iva: 0, importe: 0, fecha: Date.now() };
   const subtotalIn = h('input', { type: 'number', step: '0.01', value: cur.subtotal || '' });
   const ivaIn = h('input', { type: 'number', step: '0.01', value: cur.iva || '' });
