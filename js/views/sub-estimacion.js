@@ -262,38 +262,127 @@ export async function renderSubEstimacion({ params }) {
       return;
     }
 
-    const cur = est.pagoSub || { subtotal: 0, iva: 0, importe: 0, fecha: Date.now() };
+    // Calcular sugerido a partir de los avances actuales y precios adjudicados
+    let subtotalCalc = 0;
+    for (const cs of conceptosSub) {
+      const cant = Number(localAvances[cs.conceptoId]) || 0;
+      const puSub = Number(ganador.precios?.[cs.conceptoId]) || 0;
+      subtotalCalc += cant * puSub;
+    }
+    const ivaCalc = subtotalCalc * ivaPct;
+    const importeCalc = subtotalCalc + ivaCalc;
+
+    const cur = est.pagoSub || { subtotal: 0, iva: 0, importe: 0, fecha: Date.now(), conIva: true };
+    // Si no hay flag persistida, default es "con IVA" (el comportamiento histórico)
+    let conIva = cur.conIva !== false;
+
+    const radioConIva = h('input', { type: 'radio', name: 'pago-iva', value: 'con', checked: conIva });
+    const radioSinIva = h('input', { type: 'radio', name: 'pago-iva', value: 'sin', checked: !conIva });
     const subtotalIn = h('input', { type: 'number', step: '0.01', value: cur.subtotal || '' });
     const ivaIn = h('input', { type: 'number', step: '0.01', value: cur.iva || '' });
     const importeIn = h('input', { type: 'number', step: '0.01', value: cur.importe || '' });
     const fechaIn = h('input', { type: 'date', value: cur.fecha ? new Date(cur.fecha).toISOString().slice(0, 10) : new Date().toISOString().slice(0, 10) });
-    function syncFromSub() { const s = Number(subtotalIn.value) || 0; ivaIn.value = (s * ivaPct).toFixed(2); importeIn.value = (s * (1 + ivaPct)).toFixed(2); }
-    function syncFromImp() { const i = Number(importeIn.value) || 0; const s = i / (1 + ivaPct); subtotalIn.value = s.toFixed(2); ivaIn.value = (s * ivaPct).toFixed(2); }
+    const trasladarBtn = h('button', { type: 'button', class: 'btn ghost sm' }, '↧ Trasladar montos calculados');
+    const ivaLabel = h('label', {}, 'IVA (auto)');
+    const importeLabel = h('label', {}, 'Importe');
+
+    function aplicarModoIva() {
+      if (conIva) {
+        ivaIn.disabled = false;
+        ivaIn.style.opacity = '1';
+        ivaLabel.textContent = `IVA (${pct(ivaPct)}, auto)`;
+        importeLabel.textContent = 'Importe (c/IVA)';
+        // Re-sync del IVA según el subtotal actual
+        const s = Number(subtotalIn.value) || 0;
+        if (s > 0) {
+          ivaIn.value = (s * ivaPct).toFixed(2);
+          importeIn.value = (s * (1 + ivaPct)).toFixed(2);
+        }
+      } else {
+        ivaIn.disabled = true;
+        ivaIn.style.opacity = '0.5';
+        ivaIn.value = '0.00';
+        ivaLabel.textContent = 'IVA (no aplica)';
+        importeLabel.textContent = 'Importe (= Subtotal)';
+        importeIn.value = subtotalIn.value || '';
+      }
+    }
+
+    function syncFromSub() {
+      const s = Number(subtotalIn.value) || 0;
+      if (conIva) {
+        ivaIn.value = (s * ivaPct).toFixed(2);
+        importeIn.value = (s * (1 + ivaPct)).toFixed(2);
+      } else {
+        ivaIn.value = '0.00';
+        importeIn.value = s.toFixed(2);
+      }
+    }
+    function syncFromImp() {
+      const i = Number(importeIn.value) || 0;
+      if (conIva) {
+        const s = i / (1 + ivaPct);
+        subtotalIn.value = s.toFixed(2);
+        ivaIn.value = (s * ivaPct).toFixed(2);
+      } else {
+        // Sin IVA: importe = subtotal
+        subtotalIn.value = i.toFixed(2);
+        ivaIn.value = '0.00';
+      }
+    }
+
+    radioConIva.addEventListener('change', () => { conIva = true; aplicarModoIva(); });
+    radioSinIva.addEventListener('change', () => { conIva = false; aplicarModoIva(); });
     subtotalIn.addEventListener('input', syncFromSub);
     importeIn.addEventListener('input', syncFromImp);
+    trasladarBtn.addEventListener('click', () => {
+      if (conIva) {
+        subtotalIn.value = subtotalCalc.toFixed(2);
+        ivaIn.value = ivaCalc.toFixed(2);
+        importeIn.value = importeCalc.toFixed(2);
+      } else {
+        subtotalIn.value = subtotalCalc.toFixed(2);
+        ivaIn.value = '0.00';
+        importeIn.value = subtotalCalc.toFixed(2);
+      }
+    });
+    aplicarModoIva();   // estado inicial
 
     await modal({
       title: 'Pago al subcontratista',
       body: h('div', {}, [
-        h('p', { class: 'muted', style: { marginTop: 0, fontSize: '12px' } }, `Registra el pago hecho a ${ganador.nombre} por la estimación #${est.numero}. Al guardar se enviará al buzón del contador para que registre el gasto en bitácora.`),
-        h('div', { class: 'grid-2' }, [
+        h('p', { class: 'muted', style: { marginTop: 0, fontSize: '12px' } }, [
+          `Registra el pago hecho a ${ganador.nombre} por la estimación #${est.numero}. Al guardar se enviará al buzón del contador para que registre el gasto en bitácora.`
+        ]),
+        h('div', { class: 'card', style: { padding: '10px', marginTop: 0 } }, [
+          h('div', { class: 'muted', style: { fontSize: '12px', marginBottom: '6px' } }, '¿El pago incluye IVA?'),
+          h('div', { class: 'row', style: { gap: '14px' } }, [
+            h('label', { class: 'row', style: { cursor: 'pointer' } }, [radioConIva, h('span', {}, `Con IVA (${pct(ivaPct)})`)]),
+            h('label', { class: 'row', style: { cursor: 'pointer' } }, [radioSinIva, h('span', {}, 'Sin IVA')])
+          ]),
+          h('div', { class: 'muted', style: { fontSize: '11px', marginTop: '8px' } }, [
+            'Sugerido (calculado): subtotal ', h('b', { class: 'mono' }, money(subtotalCalc)),
+            ' · IVA ', h('b', { class: 'mono' }, money(ivaCalc)),
+            ' · importe ', h('b', { class: 'mono' }, money(importeCalc))
+          ]),
+          h('div', { style: { marginTop: '8px' } }, trasladarBtn)
+        ]),
+        h('div', { class: 'grid-2', style: { marginTop: '14px' } }, [
           h('div', { class: 'field' }, [h('label', {}, 'Subtotal'), subtotalIn]),
-          h('div', { class: 'field' }, [h('label', {}, 'IVA (auto)'), ivaIn])
+          h('div', { class: 'field' }, [ivaLabel, ivaIn])
         ]),
         h('div', { class: 'grid-2', style: { marginTop: '10px' } }, [
-          h('div', { class: 'field' }, [h('label', {}, 'Importe (c/IVA)'), importeIn]),
+          h('div', { class: 'field' }, [importeLabel, importeIn]),
           h('div', { class: 'field' }, [h('label', {}, 'Fecha'), fechaIn])
         ])
       ]),
       confirmLabel: 'Guardar y enviar al contador',
       onConfirm: async () => {
         try {
-          const pago = {
-            subtotal: Number(subtotalIn.value) || 0,
-            iva: Number(ivaIn.value) || 0,
-            importe: Number(importeIn.value) || 0,
-            fecha: fechaIn.value ? new Date(fechaIn.value).getTime() : Date.now()
-          };
+          const subtotal = Number(subtotalIn.value) || 0;
+          const ivaVal = conIva ? (Number(ivaIn.value) || 0) : 0;
+          const importe = conIva ? (Number(importeIn.value) || subtotal + ivaVal) : subtotal;
+          const pago = { subtotal, iva: ivaVal, importe, conIva, fecha: fechaIn.value ? new Date(fechaIn.value).getTime() : Date.now() };
           await setPagoSub(obraId, subId, eid, pago);
           await sincronizarPagoSubConBuzon(obraId, subId, eid, sub, est, ganador, pago);
           toast('Pago guardado y enviado al buzón del contador', 'ok');
