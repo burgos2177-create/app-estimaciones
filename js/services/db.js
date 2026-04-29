@@ -17,8 +17,13 @@ function _resolve(path) {
 // `obras/${id}/algo` y luego usarlos con set(ref(db, ...)) directamente).
 export function appPath(relPath) { return _resolve(relPath); }
 
-// ref helper que respeta APP_BASE_PATH
-function _ref(path) { return ref(db, _resolve(path)); }
+// ref helper que respeta APP_BASE_PATH. Si el resolved queda vacío (path "/"
+// para multi-path updates en root), devuelve la referencia root sin string vacío
+// (Firebase v10 rechaza ref(db, "")).
+function _ref(path) {
+  const resolved = _resolve(path);
+  return resolved ? ref(db, resolved) : ref(db);
+}
 
 export function rread(path) {
   return get(_ref(path)).then(s => s.exists() ? s.val() : null);

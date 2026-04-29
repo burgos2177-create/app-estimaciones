@@ -3,6 +3,7 @@ import { renderShell } from './shell.js';
 import { state } from '../state/store.js';
 import { listUsers, createUser, updateUserRole, setUserAssignment } from '../services/auth.js';
 import { rread, deleteObra } from '../services/db.js';
+import { migrateCatalogoToShared } from '../services/catalogo-migration.js';
 import { navigate } from '../state/router.js';
 
 export async function renderAdmin() {
@@ -75,15 +76,74 @@ function renderObrasBlock(obras) {
     ids.length === 0
       ? h('div', { class: 'empty', style: { padding: '20px' } }, 'Aún no hay obras.')
       : h('table', { class: 'tbl' }, [
-        h('thead', {}, [h('tr', {}, [h('th', {}, 'Nombre'), h('th', {}, 'Contrato'), h('th', {}, 'Cliente'), h('th', {}, '')])]),
-        h('tbody', {}, ids.map(id => h('tr', {}, [
-          h('td', {}, h('a', { href: '#/obras/' + id }, obras[id].meta?.nombre || '—')),
-          h('td', { class: 'mono' }, obras[id].meta?.contratoNo || ''),
-          h('td', {}, obras[id].meta?.cliente || ''),
-          h('td', {}, h('button', { class: 'btn sm danger', onClick: () => deleteObraConfirm(id, obras[id].meta?.nombre) }, 'Borrar'))
-        ])))
+        h('thead', {}, [h('tr', {}, [
+          h('th', {}, 'Nombre'), h('th', {}, 'Contrato'), h('th', {}, 'Cliente'),
+          h('th', {}, 'Catálogo'), h('th', {}, '')
+        ])]),
+        h('tbody', {}, ids.map(id => obraRow(id, obras[id])))
       ])
   ]);
+}
+
+function obraRow(id, obra) {
+  const cat = obra.catalogo;
+  const hasCatalogo = !!cat?.conceptos;
+  const conceptosCount = hasCatalogo ? Object.keys(cat.conceptos).length : 0;
+  const migratedAt = cat?.migratedAt || null;
+
+  let catalogoCell;
+  if (!hasCatalogo) {
+    catalogoCell = h('span', { class: 'muted', style: { fontSize: '12px' } }, 'sin catálogo');
+  } else if (migratedAt) {
+    catalogoCell = h('div', { style: { display: 'flex', flexDirection: 'column', gap: '2px' } }, [
+      h('span', { class: 'tag ok', title: `Migrado a /shared/catalogos/${id}` }, `✓ migrado · ${conceptosCount}`),
+      h('span', { class: 'muted', style: { fontSize: '11px' } }, new Date(migratedAt).toLocaleString())
+    ]);
+  } else {
+    catalogoCell = h('div', { style: { display: 'flex', flexDirection: 'column', gap: '4px', alignItems: 'flex-start' } }, [
+      h('span', { class: 'tag', style: { background: 'rgba(255,193,7,.15)', color: '#ffc107' } }, `legacy · ${conceptosCount}`),
+      h('button', { class: 'btn sm', onClick: () => migrateCatalogoConfirm(id, obra.meta?.nombre, conceptosCount) }, 'Migrar a /shared')
+    ]);
+  }
+
+  return h('tr', {}, [
+    h('td', {}, h('a', { href: '#/obras/' + id }, obra.meta?.nombre || '—')),
+    h('td', { class: 'mono' }, obra.meta?.contratoNo || ''),
+    h('td', {}, obra.meta?.cliente || ''),
+    h('td', {}, catalogoCell),
+    h('td', {}, h('button', { class: 'btn sm danger', onClick: () => deleteObraConfirm(id, obra.meta?.nombre) }, 'Borrar'))
+  ]);
+}
+
+async function migrateCatalogoConfirm(obraId, nombre, count) {
+  const body = h('div', {}, [
+    h('p', {}, [
+      'Se copiará el catálogo de "', h('strong', {}, nombre || obraId.slice(0, 6)),
+      `" (${count} conceptos) a `,
+      h('code', {}, `/shared/catalogos/${obraId}`),
+      '.'
+    ]),
+    h('p', { class: 'muted', style: { fontSize: '12px' } }, 'Los IDs de los conceptos se reemplazan por keys derivados de la clave OPUS + hash de la jerarquía. El catálogo legacy NO se borra; solo se marca con migratedAt y se guarda el mapeo legacyId→conceptoKey para futuras migraciones de generadores y desgloses históricos en bitácora.'),
+    h('p', { class: 'muted', style: { fontSize: '12px' } }, 'Esta acción no afecta lecturas/escrituras de la app aún — eso viene en el siguiente paso (A2).')
+  ]);
+
+  await modal({
+    title: 'Migrar catálogo a /shared/', body, confirmLabel: 'Migrar',
+    onConfirm: async () => {
+      try {
+        const res = await migrateCatalogoToShared(obraId);
+        const msg = res.collisions.length > 0
+          ? `Catálogo migrado · ${res.conceptosCount} conceptos · ${res.collisions.length} colisiones desambiguadas con sufijo`
+          : `Catálogo migrado · ${res.conceptosCount} conceptos (${res.pusCount} PUs, ${res.agrupadoresCount} agrupadores)`;
+        toast(msg, 'ok');
+        renderAdmin();
+        return true;
+      } catch (err) {
+        toast('Error: ' + err.message, 'danger');
+        return false;
+      }
+    }
+  });
 }
 
 async function newUserDialog() {
