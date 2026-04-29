@@ -71,8 +71,17 @@ async function draw(obraId, obra, estId) {
     : null;
   const buzonBadge =
     buzonEstado === 'pendiente' ? h('span', { class: 'tag warn', style: { marginLeft: '6px' }, title: 'El contador todavía no aprueba este pago en bitácora.' }, '⏳ Esperando aprobación')
-    : buzonEstado === 'aprobado' ? h('span', { class: 'tag ok', style: { marginLeft: '6px' }, title: buzonItem?.aprobadoAt ? 'Aprobado el ' + new Date(buzonItem.aprobadoAt).toLocaleString('es-MX') : 'Aprobado por el contador' }, '✓ Aprobado por contador')
+    : buzonEstado === 'aprobado' ? h('span', {
+        class: 'tag ok', style: { marginLeft: '6px' },
+        title: (buzonItem?.aprobadoAt ? 'Aprobado el ' + new Date(buzonItem.aprobadoAt).toLocaleString('es-MX') : 'Aprobado por el contador') +
+               (buzonItem?.actualizadoPorContador ? ' · Editado luego por el contador' : '')
+      }, buzonItem?.actualizadoPorContador ? '✓ Aprobado · ✎ editado por contador' : '✓ Aprobado por contador')
     : buzonEstado === 'rechazado' ? h('span', { class: 'tag danger', style: { marginLeft: '6px' }, title: buzonItem?.comentarioRechazo ? 'Motivo: ' + buzonItem.comentarioRechazo : 'Rechazado por el contador' }, '✕ Rechazado')
+    : buzonEstado === 'huerfano' ? h('span', {
+        class: 'tag warn', style: { marginLeft: '6px', borderColor: '#a06bd9', color: '#a06bd9' },
+        title: (buzonItem?.descripcionHuerfano || 'El contador eliminó el movimiento contable.') +
+               (buzonItem?.huerfanoAt ? ' · ' + new Date(buzonItem.huerfanoAt).toLocaleString('es-MX') : '')
+      }, '⚠ Movimiento eliminado')
     : null;
 
   // Bloque de anticipo (solo si > 0)
@@ -318,13 +327,15 @@ async function sincronizarConBuzon(obraId, estId, est, pago) {
   const proyectoId = links?.[obraId] || null;
   const obraNombre = obraMeta?.nombre || '';
 
-  // Busca si ya hay un item PENDIENTE para esta estimación. Si sí, lo actualiza.
+  // Busca si ya hay un item PENDIENTE o HUÉRFANO para esta estimación. Si sí,
+  // lo actualiza (vuelve a pendiente). Si está aprobado, no debería llegar aquí
+  // porque editPagoDialog ya lo bloqueó. Si está rechazado, creamos uno nuevo.
   const items = await listBuzonItems();
   const existing = Object.entries(items).find(([_, it]) =>
     it?.tipo === 'pago_cliente' &&
     it?.obraId === obraId &&
     it?.estimId === estId &&
-    it?.estado === 'pendiente'
+    (it?.estado === 'pendiente' || it?.estado === 'huerfano')
   );
 
   const payload = {
@@ -344,7 +355,16 @@ async function sincronizarConBuzon(obraId, estId, est, pago) {
 
   if (existing) {
     const [itemId] = existing;
-    await updateBuzonItem(itemId, { ...payload, actualizadoAt: Date.now() });
+    // Limpia campos del estado huérfano si los había
+    await updateBuzonItem(itemId, {
+      ...payload,
+      actualizadoAt: Date.now(),
+      huerfanoAt: null,
+      huerfanoPor: null,
+      descripcionHuerfano: null,
+      movId: null,
+      destinoRefPath: null
+    });
   } else {
     await pushBuzonItem(payload);
   }
