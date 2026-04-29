@@ -3,7 +3,8 @@
 
 import { h, modal, toast } from '../util/dom.js';
 import { renderShell } from './shell.js';
-import { rread, setSubEstimacionAvance, setPagoSub, cerrarSubEstimacion, reabrirSubEstimacion } from '../services/db.js';
+import { rread, setSubEstimacionAvance, setPagoSub, cerrarSubEstimacion, reabrirSubEstimacion,
+         getObraLinks, listBuzonItems, pushBuzonItem, updateBuzonItem } from '../services/db.js';
 import { state } from '../state/store.js';
 import { navigate, dispatch } from '../state/router.js';
 import { money, num, dateMx, pct } from '../util/format.js';
@@ -149,7 +150,34 @@ export async function renderSubEstimacion({ params }) {
     tbody
   ]);
 
-  const editPagoBtn = h('button', { class: 'btn sm ghost', onClick: () => editPagoSubDialog() }, est.pagoSub ? '✎ Editar pago' : '+ Registrar pago');
+  // Estado del buzón para este pago al sub (para badges y bloqueo)
+  let buzonItems = {};
+  try { buzonItems = await listBuzonItems(); } catch {}
+  const buzonItem = Object.values(buzonItems).find(it =>
+    it?.tipo === 'estimacion_subcontratista' &&
+    it?.obraId === obraId && it?.subcontratoId === subId && it?.subEstimacionId === eid
+  );
+  const buzonEstado = buzonItem?.estado || null;
+
+  const editPagoBtn = h('button', { class: 'btn sm ghost', onClick: () => editPagoSubDialog() },
+    buzonEstado === 'aprobado' ? '🔒 Ver pago'
+    : (est.pagoSub ? '✎ Editar pago' : '+ Registrar pago')
+  );
+
+  const buzonBadge =
+    buzonEstado === 'pendiente' ? h('span', { class: 'tag warn', style: { marginLeft: '6px' }, title: 'El contador todavía no aprueba el gasto en bitácora.' }, '⏳ Esperando aprobación')
+    : buzonEstado === 'aprobado' ? h('span', {
+        class: 'tag ok', style: { marginLeft: '6px' },
+        title: (buzonItem?.aprobadoAt ? 'Aprobado el ' + new Date(buzonItem.aprobadoAt).toLocaleString('es-MX') : 'Aprobado por el contador') +
+               (buzonItem?.actualizadoPorContador ? ' · Editado luego por el contador' : '')
+      }, buzonItem?.actualizadoPorContador ? '✓ Aprobado · ✎ editado por contador' : '✓ Aprobado por contador')
+    : buzonEstado === 'rechazado' ? h('span', { class: 'tag danger', style: { marginLeft: '6px' }, title: buzonItem?.comentarioRechazo ? 'Motivo: ' + buzonItem.comentarioRechazo : 'Rechazado por el contador' }, '✕ Rechazado')
+    : buzonEstado === 'huerfano' ? h('span', {
+        class: 'tag warn', style: { marginLeft: '6px', borderColor: '#a06bd9', color: '#a06bd9' },
+        title: (buzonItem?.descripcionHuerfano || 'El contador eliminó el gasto contable.') +
+               (buzonItem?.huerfanoAt ? ' · ' + new Date(buzonItem.huerfanoAt).toLocaleString('es-MX') : '')
+      }, '⚠ Gasto eliminado')
+    : null;
 
   const summary = h('div', { class: 'card' }, [
     h('div', { class: 'grid-3' }, [
@@ -167,7 +195,8 @@ export async function renderSubEstimacion({ params }) {
         h('span', { class: 'muted' }, 'Pago al sub: '),
         est.pagoSub
           ? h('b', {}, [money(est.pagoSub.importe), ' · ', dateMx(est.pagoSub.fecha)])
-          : h('span', { class: 'muted' }, 'Sin registrar')
+          : h('span', { class: 'muted' }, 'Sin registrar'),
+        buzonBadge
       ]),
       h('div', { style: { flex: 1 } }),
       editable && editPagoBtn
@@ -199,6 +228,36 @@ export async function renderSubEstimacion({ params }) {
     });
   }
   async function editPagoSubDialog() {
+    // Si el gasto ya fue aprobado por el contador, NO se puede editar desde
+    // estimaciones — esto evita inconsistencia con el movimiento contable.
+    if (buzonEstado === 'aprobado' && buzonItem) {
+      const fechaApr = buzonItem.aprobadoAt ? new Date(buzonItem.aprobadoAt).toLocaleString('es-MX') : 'fecha desconocida';
+      await modal({
+        title: `Pago a ${ganador.nombre} (aprobado)`,
+        body: h('div', {}, [
+          h('div', { class: 'card', style: { background: 'rgba(93,211,158,0.08)', borderColor: 'var(--ok)', padding: '12px', marginTop: 0 } }, [
+            h('div', { class: 'tag ok', style: { marginBottom: '8px' } }, '🔒 Aprobado por el contador'),
+            h('div', { style: { fontSize: '13px', marginBottom: '8px' } }, `Aprobado el ${fechaApr}.`),
+            h('div', { class: 'muted', style: { fontSize: '12px' } }, 'Para hacer cualquier cambio en este pago, debe gestionarse del lado de la app contadora (SOGRUB Bitácora). Desde aquí no se puede editar para evitar que los datos queden desincronizados con el gasto ya registrado.')
+          ]),
+          h('div', { class: 'grid-2', style: { marginTop: '14px' } }, [
+            h('div', { class: 'field' }, [h('label', {}, 'Subtotal'), h('div', { class: 'mono' }, money(buzonItem.monto?.subtotal || 0))]),
+            h('div', { class: 'field' }, [h('label', {}, 'IVA'), h('div', { class: 'mono' }, money(buzonItem.monto?.iva || 0))])
+          ]),
+          h('div', { class: 'grid-2', style: { marginTop: '8px' } }, [
+            h('div', { class: 'field' }, [h('label', {}, 'Importe'), h('div', { class: 'mono', style: { color: 'var(--accent)', fontWeight: 600 } }, money(buzonItem.monto?.importe || 0))]),
+            h('div', { class: 'field' }, [h('label', {}, 'Fecha del pago'), h('div', {}, buzonItem.fecha ? dateMx(buzonItem.fecha) : '—')])
+          ]),
+          buzonItem.movId && h('div', { class: 'muted', style: { fontSize: '11px', marginTop: '12px' } }, [
+            'ID del movimiento contable: ', h('code', {}, buzonItem.movId)
+          ])
+        ]),
+        confirmLabel: 'Cerrar', cancelLabel: '',
+        onConfirm: () => true
+      });
+      return;
+    }
+
     const cur = est.pagoSub || { subtotal: 0, iva: 0, importe: 0, fecha: Date.now() };
     const subtotalIn = h('input', { type: 'number', step: '0.01', value: cur.subtotal || '' });
     const ivaIn = h('input', { type: 'number', step: '0.01', value: cur.iva || '' });
@@ -212,7 +271,7 @@ export async function renderSubEstimacion({ params }) {
     await modal({
       title: 'Pago al subcontratista',
       body: h('div', {}, [
-        h('p', { class: 'muted', style: { marginTop: 0, fontSize: '12px' } }, `Registra el pago hecho a ${ganador.nombre} por la estimación #${est.numero}.`),
+        h('p', { class: 'muted', style: { marginTop: 0, fontSize: '12px' } }, `Registra el pago hecho a ${ganador.nombre} por la estimación #${est.numero}. Al guardar se enviará al buzón del contador para que registre el gasto en bitácora.`),
         h('div', { class: 'grid-2' }, [
           h('div', { class: 'field' }, [h('label', {}, 'Subtotal'), subtotalIn]),
           h('div', { class: 'field' }, [h('label', {}, 'IVA (auto)'), ivaIn])
@@ -222,21 +281,85 @@ export async function renderSubEstimacion({ params }) {
           h('div', { class: 'field' }, [h('label', {}, 'Fecha'), fechaIn])
         ])
       ]),
-      confirmLabel: 'Guardar',
+      confirmLabel: 'Guardar y enviar al contador',
       onConfirm: async () => {
         try {
-          await setPagoSub(obraId, subId, eid, {
+          const pago = {
             subtotal: Number(subtotalIn.value) || 0,
             iva: Number(ivaIn.value) || 0,
             importe: Number(importeIn.value) || 0,
             fecha: fechaIn.value ? new Date(fechaIn.value).getTime() : Date.now()
-          });
-          toast('Pago registrado', 'ok');
+          };
+          await setPagoSub(obraId, subId, eid, pago);
+          await sincronizarPagoSubConBuzon(obraId, subId, eid, sub, est, ganador, pago);
+          toast('Pago guardado y enviado al buzón del contador', 'ok');
           dispatch();
           return true;
-        } catch (err) { toast('Error: ' + err.message, 'danger'); return false; }
+        } catch (err) {
+          console.error(err);
+          toast('Error: ' + err.message, 'danger');
+          return false;
+        }
       }
     });
+  }
+}
+
+// Sincroniza con /shared/buzon: crea o actualiza item tipo='estimacion_subcontratista'
+// para que el contador apruebe y se vuelva un gasto en bitácora.
+async function sincronizarPagoSubConBuzon(obraId, subId, eid, sub, est, ganador, pago) {
+  const [links, obraMeta] = await Promise.all([
+    getObraLinks(),
+    rread(`obras/${obraId}/meta`)
+  ]);
+  const proyectoId = links?.[obraId] || null;
+  const obraNombre = obraMeta?.nombre || '';
+
+  const items = await listBuzonItems();
+  const existing = Object.entries(items).find(([_, it]) =>
+    it?.tipo === 'estimacion_subcontratista' &&
+    it?.obraId === obraId &&
+    it?.subcontratoId === subId &&
+    it?.subEstimacionId === eid &&
+    (it?.estado === 'pendiente' || it?.estado === 'huerfano')
+  );
+
+  const subNombre = sub.meta?.nombre || '';
+  const proveedorNombre = ganador?.nombre || '';
+
+  const payload = {
+    tipo: 'estimacion_subcontratista',
+    origenApp: 'estimaciones',
+    obraId,
+    obraNombre,
+    proyectoId,
+    subcontratoId: subId,
+    subcontratoNombre: subNombre,
+    subEstimacionId: eid,
+    subEstimacionNumero: est.numero,
+    proveedorNombre,
+    proveedorEmail: ganador?.email || '',
+    proveedorTelefono: ganador?.telefono || '',
+    monto: pago,
+    fecha: pago.fecha,
+    descripcion: `Pago a ${proveedorNombre} — Subcontrato "${subNombre}", estimación #${est.numero}${proyectoId ? '' : ' (obra sin vincular)'}`,
+    estado: 'pendiente',
+    creadoPor: state.user?.uid || ''
+  };
+
+  if (existing) {
+    const [itemId] = existing;
+    await updateBuzonItem(itemId, {
+      ...payload,
+      actualizadoAt: Date.now(),
+      huerfanoAt: null,
+      huerfanoPor: null,
+      descripcionHuerfano: null,
+      movId: null,
+      destinoRefPath: null
+    });
+  } else {
+    await pushBuzonItem(payload);
   }
 }
 
