@@ -2,7 +2,7 @@
 // Antes de exportar PDF/XLSX abre un diálogo de configuración (filtros, modo,
 // amortización, notas).
 
-import { h, modal, toast } from '../util/dom.js';
+import { h, modal, toast, buzonBadge } from '../util/dom.js';
 import { renderShell } from './shell.js';
 import { rread, loadObra, setPagoCliente, getObraLinks, listBuzonItems, pushBuzonItem, updateBuzonItem } from '../services/db.js';
 import { state } from '../state/store.js';
@@ -45,7 +45,7 @@ async function draw(obraId, obra, estId) {
   const matching = Object.values(buzonItems).filter(it =>
     it?.tipo === 'pago_cliente' && it?.obraId === obraId && it?.estimId === estId
   );
-  const activo = matching.find(it => it.estado !== 'rechazado');
+  const activo = matching.find(it => it.estado !== 'rechazado' && it.estado !== 'cerrado');
   const buzonItem = activo || matching.sort((a, b) => (b.creadoAt || 0) - (a.creadoAt || 0))[0] || null;
   const buzonEstado = buzonItem?.estado || null;
   const m = obra.meta || {};
@@ -69,24 +69,12 @@ async function draw(obraId, obra, estId) {
   ]);
 
   const editable = est.estado === 'borrador' || state.user.role === 'admin';
+  const bloqueado = buzonEstado === 'aprobado' || buzonEstado === 'cobrado' || buzonEstado === 'pagado';
   const editPagosBtn = editable
     ? h('button', { class: 'btn sm ghost', onClick: async () => { const ok = await editPagoDialog(obraId, estId, est, ivaPct); if (ok) renderResumen({ params: { id: obraId } }); } },
-      buzonEstado === 'aprobado' ? '🔒 Ver pago' : '✎ Editar pago')
+      bloqueado ? '🔒 Ver pago' : '✎ Editar pago')
     : null;
-  const buzonBadge =
-    buzonEstado === 'pendiente' ? h('span', { class: 'tag warn', style: { marginLeft: '6px' }, title: 'El contador todavía no aprueba este pago en bitácora.' }, '⏳ Esperando aprobación')
-    : buzonEstado === 'aprobado' ? h('span', {
-        class: 'tag ok', style: { marginLeft: '6px' },
-        title: (buzonItem?.aprobadoAt ? 'Aprobado el ' + new Date(buzonItem.aprobadoAt).toLocaleString('es-MX') : 'Aprobado por el contador') +
-               (buzonItem?.actualizadoPorContador ? ' · Editado luego por el contador' : '')
-      }, buzonItem?.actualizadoPorContador ? '✓ Aprobado · ✎ editado por contador' : '✓ Aprobado por contador')
-    : buzonEstado === 'rechazado' ? h('span', { class: 'tag danger', style: { marginLeft: '6px' }, title: buzonItem?.comentarioRechazo ? 'Motivo: ' + buzonItem.comentarioRechazo : 'Rechazado por el contador' }, '✕ Rechazado')
-    : buzonEstado === 'huerfano' ? h('span', {
-        class: 'tag warn', style: { marginLeft: '6px', borderColor: '#a06bd9', color: '#a06bd9' },
-        title: (buzonItem?.descripcionHuerfano || 'El contador eliminó el movimiento contable.') +
-               (buzonItem?.huerfanoAt ? ' · ' + new Date(buzonItem.huerfanoAt).toLocaleString('es-MX') : '')
-      }, '⚠ Movimiento eliminado')
-    : null;
+  const badge = buzonBadge(buzonEstado, buzonItem);
 
   // Bloque de anticipo (solo si > 0)
   const anticipoCard = anticipoPct > 0 ? h('div', { class: 'card' }, [
@@ -134,7 +122,7 @@ async function draw(obraId, obra, estId) {
     ]));
   }
   ecBodyRows.push(h('tr', {}, [
-    h('td', {}, ['Pagos cliente (acumulado) ', editPagosBtn, buzonBadge]),
+    h('td', {}, ['Pagos cliente (acumulado) ', editPagosBtn, badge]),
     h('td', { class: 'num' }, money(subtotalPagado)),
     h('td', { class: 'num muted' }, money(ivaPagado)),
     h('td', { class: 'num' }, h('b', {}, money(importePagado)))

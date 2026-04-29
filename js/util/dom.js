@@ -39,6 +39,39 @@ export function toast(msg, kind = '') {
   setTimeout(() => t.remove(), 3100);
 }
 
+// Badge de estado del buzón para las vistas de estimaciones.
+// Mapea todos los estados del nuevo esquema (recibido → cerrado).
+export function buzonBadge(estado, item) {
+  if (!estado) return null;
+  const folio = item?.folio ? ` [${item.folio}]` : '';
+  if (estado === 'recibido' || estado === 'pendiente')
+    return h('span', { class: 'tag warn', style: { marginLeft: '6px' }, title: 'En espera de revisión por el contador.' }, `⏳ Recibido${folio}`);
+  if (estado === 'en_revision')
+    return h('span', { class: 'tag warn', style: { marginLeft: '6px', borderColor: '#5b9ef2', color: '#5b9ef2' }, title: 'El contador está revisando.' }, `🔍 En revisión${folio}`);
+  if (estado === 'aprobado') {
+    const aprDate = item?.aprobadoAt ? ' · ' + new Date(item.aprobadoAt).toLocaleString('es-MX') : '';
+    const edited  = item?.actualizadoPorContador ? ' · Editado luego por el contador' : '';
+    return h('span', { class: 'tag ok', style: { marginLeft: '6px' }, title: `Aprobado${aprDate}${edited}` },
+      item?.actualizadoPorContador ? `✓ Aprobado${folio} · ✎ editado` : `✓ Aprobado${folio}`);
+  }
+  if (estado === 'cobrado' || estado === 'pagado') {
+    const ts = item?.cobradoAt || item?.pagadoAt;
+    const date = ts ? ' · ' + new Date(ts).toLocaleString('es-MX') : '';
+    const met  = item?.metodoPago ? ` · ${item.metodoPago}` : '';
+    return h('span', { class: 'tag ok', style: { marginLeft: '6px' }, title: `${estado === 'cobrado' ? 'Cobrado' : 'Pagado'}${date}${met}` },
+      `✓ ${estado === 'cobrado' ? 'Cobrado' : 'Pagado'}${folio}`);
+  }
+  if (estado === 'rechazado')
+    return h('span', { class: 'tag danger', style: { marginLeft: '6px' }, title: item?.comentarioRechazo ? 'Motivo: ' + item.comentarioRechazo : 'Rechazado por el contador' }, `✕ Rechazado${folio}`);
+  if (estado === 'huerfano')
+    return h('span', { class: 'tag warn', style: { marginLeft: '6px', borderColor: '#a06bd9', color: '#a06bd9' },
+      title: (item?.descripcionHuerfano || 'El movimiento contable fue eliminado.') + (item?.huerfanoAt ? ' · ' + new Date(item.huerfanoAt).toLocaleString('es-MX') : '') },
+      `⚠ Movimiento eliminado${folio}`);
+  if (estado === 'cerrado')
+    return h('span', { class: 'tag', style: { marginLeft: '6px', opacity: '.6' }, title: 'Cerrado por el contador.' }, `Cerrado${folio}`);
+  return null;
+}
+
 export function modal({ title, body, onConfirm, confirmLabel = 'Aceptar', cancelLabel = 'Cancelar', danger = false, size = '' }) {
   return new Promise((resolve) => {
     const root = document.getElementById('modal-root');

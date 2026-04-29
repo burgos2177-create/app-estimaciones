@@ -1,7 +1,7 @@
 // Detalle de estimación del subcontratista. Captura cantidad ejecutada por el sub
 // para cada concepto y calcula el importe a pagarle según los precios adjudicados.
 
-import { h, modal, toast } from '../util/dom.js';
+import { h, modal, toast, buzonBadge } from '../util/dom.js';
 import { renderShell } from './shell.js';
 import { rread, loadObra, buildConceptosLookup, setSubEstimacionAvance, setPagoSub,
          cerrarSubEstimacion, reabrirSubEstimacion,
@@ -160,29 +160,17 @@ export async function renderSubEstimacion({ params }) {
     it?.tipo === 'estimacion_subcontratista' &&
     it?.obraId === obraId && it?.subcontratoId === subId && it?.subEstimacionId === eid
   );
-  const activo = matching.find(it => it.estado !== 'rechazado');
+  const activo = matching.find(it => it.estado !== 'rechazado' && it.estado !== 'cerrado');
   const buzonItem = activo || matching.sort((a, b) => (b.creadoAt || 0) - (a.creadoAt || 0))[0] || null;
   const buzonEstado = buzonItem?.estado || null;
 
+  const bloqueado = buzonEstado === 'aprobado' || buzonEstado === 'cobrado' || buzonEstado === 'pagado';
   const editPagoBtn = h('button', { class: 'btn sm ghost', onClick: () => editPagoSubDialog() },
-    buzonEstado === 'aprobado' ? '🔒 Ver pago'
+    bloqueado ? '🔒 Ver pago'
     : (est.pagoSub ? '✎ Editar pago' : '+ Registrar pago')
   );
 
-  const buzonBadge =
-    buzonEstado === 'pendiente' ? h('span', { class: 'tag warn', style: { marginLeft: '6px' }, title: 'El contador todavía no aprueba el gasto en bitácora.' }, '⏳ Esperando aprobación')
-    : buzonEstado === 'aprobado' ? h('span', {
-        class: 'tag ok', style: { marginLeft: '6px' },
-        title: (buzonItem?.aprobadoAt ? 'Aprobado el ' + new Date(buzonItem.aprobadoAt).toLocaleString('es-MX') : 'Aprobado por el contador') +
-               (buzonItem?.actualizadoPorContador ? ' · Editado luego por el contador' : '')
-      }, buzonItem?.actualizadoPorContador ? '✓ Aprobado · ✎ editado por contador' : '✓ Aprobado por contador')
-    : buzonEstado === 'rechazado' ? h('span', { class: 'tag danger', style: { marginLeft: '6px' }, title: buzonItem?.comentarioRechazo ? 'Motivo: ' + buzonItem.comentarioRechazo : 'Rechazado por el contador' }, '✕ Rechazado')
-    : buzonEstado === 'huerfano' ? h('span', {
-        class: 'tag warn', style: { marginLeft: '6px', borderColor: '#a06bd9', color: '#a06bd9' },
-        title: (buzonItem?.descripcionHuerfano || 'El contador eliminó el gasto contable.') +
-               (buzonItem?.huerfanoAt ? ' · ' + new Date(buzonItem.huerfanoAt).toLocaleString('es-MX') : '')
-      }, '⚠ Gasto eliminado')
-    : null;
+  const badge = buzonBadge(buzonEstado, buzonItem);
 
   const summary = h('div', { class: 'card' }, [
     h('div', { class: 'grid-3' }, [
@@ -201,7 +189,7 @@ export async function renderSubEstimacion({ params }) {
         est.pagoSub
           ? h('b', {}, [money(est.pagoSub.importe), ' · ', dateMx(est.pagoSub.fecha)])
           : h('span', { class: 'muted' }, 'Sin registrar'),
-        buzonBadge
+        badge
       ]),
       h('div', { style: { flex: 1 } }),
       editable && editPagoBtn
@@ -235,13 +223,14 @@ export async function renderSubEstimacion({ params }) {
   async function editPagoSubDialog() {
     // Si el gasto ya fue aprobado por el contador, NO se puede editar desde
     // estimaciones — esto evita inconsistencia con el movimiento contable.
-    if (buzonEstado === 'aprobado' && buzonItem) {
+    if (bloqueado && buzonItem) {
+      const estadoLabel = { aprobado: 'aprobado', cobrado: 'pagado', pagado: 'pagado' }[buzonEstado] || buzonEstado;
       const fechaApr = buzonItem.aprobadoAt ? new Date(buzonItem.aprobadoAt).toLocaleString('es-MX') : 'fecha desconocida';
       await modal({
-        title: `Pago a ${ganador.nombre} (aprobado)`,
+        title: `Pago a ${ganador.nombre} (${estadoLabel})`,
         body: h('div', {}, [
           h('div', { class: 'card', style: { background: 'rgba(93,211,158,0.08)', borderColor: 'var(--ok)', padding: '12px', marginTop: 0 } }, [
-            h('div', { class: 'tag ok', style: { marginBottom: '8px' } }, '🔒 Aprobado por el contador'),
+            h('div', { class: 'tag ok', style: { marginBottom: '8px' } }, `🔒 ${estadoLabel.charAt(0).toUpperCase() + estadoLabel.slice(1)} por el contador`),
             h('div', { style: { fontSize: '13px', marginBottom: '8px' } }, `Aprobado el ${fechaApr}.`),
             h('div', { class: 'muted', style: { fontSize: '12px' } }, 'Para hacer cualquier cambio en este pago, debe gestionarse del lado de la app contadora (SOGRUB Bitácora). Desde aquí no se puede editar para evitar que los datos queden desincronizados con el gasto ya registrado.')
           ]),
