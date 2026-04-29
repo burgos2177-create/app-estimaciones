@@ -1,6 +1,6 @@
 import { h, modal, toast } from '../util/dom.js';
 import { renderShell } from './shell.js';
-import { rread, createEstimacion, cerrarEstimacion, reabrirEstimacion } from '../services/db.js';
+import { loadObra, resolveConceptoKeyLocal, createEstimacion, cerrarEstimacion, reabrirEstimacion } from '../services/db.js';
 import { state } from '../state/store.js';
 import { navigate } from '../state/router.js';
 import { money, dateMx, num0, pct } from '../util/format.js';
@@ -10,16 +10,13 @@ export async function renderEstimaciones({ params }) {
   const obraId = params.id;
   renderShell(crumbs(obraId), h('div', { class: 'empty' }, 'Cargando estimaciones…'));
 
-  const obra = await rread(`obras/${obraId}`);
+  const obra = await loadObra(obraId);
   if (!obra) { renderShell(crumbs(obraId), h('div', { class: 'empty' }, 'Obra no encontrada.')); return; }
   const m = obra.meta || {};
   const ests = obra.estimaciones || {};
-  const conceptos = obra.catalogo?.conceptos || {};
-  const generadores = obra.generadores || {};
-  const avances = obra.avances || {};
 
   const ids = Object.keys(ests).sort((a, b) => (ests[a].numero || 0) - (ests[b].numero || 0));
-  const totalsByEst = computeMontosByEstimacion(ests, conceptos, generadores, avances);
+  const totalsByEst = computeMontosByEstimacion(obra);
 
   const head = h('div', { class: 'row' }, [
     h('h1', {}, 'Estimaciones'),
@@ -75,28 +72,36 @@ function crumbs(obraId, nombre) {
   ];
 }
 
-export function computeMontosByEstimacion(ests, conceptos, generadores, avances) {
+export function computeMontosByEstimacion(obra) {
+  const ests = obra?.estimaciones || {};
+  const conceptos = obra?.catalogo?.conceptos || {};
+  const generadores = obra?.generadores || {};
+  const avances = obra?.avances || {};
+
   const out = {};
   for (const eid of Object.keys(ests)) {
     out[eid] = { subtotal: 0, iva: 0, importe: 0, numGen: 0 };
   }
-  // Generadores → suma por estimación
+  // Generadores → suma por estimación. conceptoIds pueden ser legacy: resolver.
   for (const g of Object.values(generadores)) {
     if (!out[g.estimacionId]) continue;
     out[g.estimacionId].numGen++;
-    const c = conceptos[g.conceptoId];
+    const k = resolveConceptoKeyLocal(obra, g.conceptoId);
+    const c = k ? conceptos[k] : null;
     if (!c) continue;
     const cant = calcGeneradorTotal(c, g);
     out[g.estimacionId].subtotal += cant * (c.precio_unitario || 0);
   }
   // Avances directos (sin generador) — se suman si existen
-  for (const [cid, byEstim] of Object.entries(avances || {})) {
-    const c = conceptos[cid];
+  for (const [cid, byEstim] of Object.entries(avances)) {
+    const k = resolveConceptoKeyLocal(obra, cid);
+    const c = k ? conceptos[k] : null;
     if (!c) continue;
     for (const [eid, cant] of Object.entries(byEstim || {})) {
       if (!out[eid]) continue;
-      // Si ya hay generadores para este concepto+estim, no duplicar (avances se usa solo cuando no hay gen)
-      const hasGen = Object.values(generadores).some(g => g.conceptoId === cid && g.estimacionId === eid);
+      const hasGen = Object.values(generadores).some(g =>
+        resolveConceptoKeyLocal(obra, g.conceptoId) === k && g.estimacionId === eid
+      );
       if (hasGen) continue;
       out[eid].subtotal += Number(cant) * (c.precio_unitario || 0);
     }

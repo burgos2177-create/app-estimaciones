@@ -6,7 +6,7 @@
 import { h, modal, toast } from '../util/dom.js';
 import { renderShell } from './shell.js';
 import {
-  rread, updateSubcontratoMeta, setSubcontratoConceptos,
+  rread, loadObra, buildConceptosLookup, updateSubcontratoMeta, setSubcontratoConceptos,
   addLicitante, updateLicitante, setLicitantePrecios, deleteLicitante,
   adjudicarSubcontrato, desadjudicarSubcontrato,
   createSubEstimacion, setSubEstimacionAvance, cerrarSubEstimacion, reabrirSubEstimacion,
@@ -31,7 +31,7 @@ export async function renderSubcontrato({ params }) {
 
   renderShell(crumbs(obraId, '...', subId), h('div', { class: 'empty' }, 'Cargando…'));
 
-  const obra = await rread(`obras/${obraId}`);
+  const obra = await loadObra(obraId);
   const sub = obra?.subcontratos?.[subId];
   if (!obra || !sub) {
     renderShell(crumbs(obraId, '?', subId), h('div', { class: 'empty' }, 'Subcontrato no encontrado.'));
@@ -39,7 +39,7 @@ export async function renderSubcontrato({ params }) {
   }
   const m = obra.meta || {};
   const meta = sub.meta || {};
-  const conceptosAll = obra.catalogo?.conceptos || {};
+  const conceptosAll = buildConceptosLookup(obra);
   const conceptosSub = sub.conceptos || [];
   const licitantes = sub.licitantes || {};
 
@@ -613,7 +613,8 @@ async function importLicitanteFlow(obraId, subId, sub) {
     fileIn.remove();
     if (!f) return;
     try {
-      const conceptosAll = await rread(`obras/${obraId}/catalogo/conceptos`) || {};
+      const obraFresh = await loadObra(obraId);
+      const conceptosAll = buildConceptosLookup(obraFresh);
       const result = await parseLicitanteXlsx(f, sub, conceptosAll);
       if (!result.precios || Object.keys(result.precios).length === 0) {
         toast('No se detectaron precios en el archivo', 'warn');

@@ -18,6 +18,9 @@
 
 import { rread, rupdate, appPath } from './db.js';
 import { state } from '../state/store.js';
+import { computeStableKey, computeConceptoKey, sanitizeConcepto } from './catalogo-keys.js';
+
+export { computeStableKey, computeConceptoKey };
 
 export async function migrateCatalogoToShared(obraId) {
   if (!obraId) throw new Error('obraId requerido');
@@ -99,71 +102,6 @@ export async function migrateCatalogoToShared(obraId) {
     collisions: collisionLog,
     keyMap,
     sharedPath: `/shared/catalogos/${obraId}`
-  };
-}
-
-// Identidad estable: replica la fórmula que usa `reconcileCatalogo` en db.js.
-// Cualquier cambio aquí debe sincronizarse allí.
-export function computeStableKey(c) {
-  const pathStr = (c.path || []).map(p => `${p?.clave || ''}|${p?.descripcion || ''}`).join('>>');
-  return `${c.tipo || ''}::${pathStr}::${c.clave || ''}`;
-}
-
-export function computeConceptoKey(c) {
-  const stable = computeStableKey(c);
-  const h = hash6(stable);
-  if (c.tipo === 'agrupador') {
-    return `agr_${slug(c.descripcion || '')}_${h}`;
-  }
-  // PU (incluye los pocos sin clave: ej "_a3f2c1")
-  const claveCleaned = sanitizeKeySegment(c.clave || '');
-  return `${claveCleaned}_${h}`;
-}
-
-// FNV-1a 32-bit, devuelve hex de 6 chars.
-function hash6(str) {
-  let h = 0x811c9dc5;
-  for (let i = 0; i < str.length; i++) {
-    h ^= str.charCodeAt(i);
-    h = Math.imul(h, 0x01000193);
-  }
-  return (h >>> 0).toString(16).padStart(8, '0').slice(-6);
-}
-
-// Slug ASCII para descripciones de agrupadores. Limita longitud para keys razonables.
-function slug(s) {
-  return String(s)
-    .normalize('NFD').replace(/[̀-ͯ]/g, '')
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 40) || 'sn';
-}
-
-// RTDB no acepta `.`, `#`, `$`, `[`, `]`, `/` en keys. Las claves OPUS suelen ser
-// alfanuméricas con guiones, pero por seguridad sanitizamos.
-function sanitizeKeySegment(s) {
-  return String(s).replace(/[.#$[\]/]/g, '_');
-}
-
-// Snapshot del concepto con solo los campos canónicos. Evita cargar `id` u otros
-// campos efímeros que el parser pudo haber dejado.
-function sanitizeConcepto(c) {
-  return {
-    tipo: c.tipo,
-    clave: c.clave || '',
-    descripcion: c.descripcion || '',
-    unidad: c.unidad || '',
-    cantidad: Number(c.cantidad) || 0,
-    precio_unitario: Number(c.precio_unitario) || 0,
-    total: Number(c.total) || 0,
-    nivel: Number(c.nivel) || 0,
-    path: c.path || [],
-    agrupadores: c.agrupadores || [],
-    orden: Number(c.orden) || 0,
-    plantillaTipo: c.plantillaTipo || null,
-    plantillaConfig: c.plantillaConfig || null,
-    archivado: !!c.archivado
   };
 }
 

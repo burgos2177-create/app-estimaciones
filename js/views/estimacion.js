@@ -1,6 +1,6 @@
 import { h, modal, toast } from '../util/dom.js';
 import { renderShell } from './shell.js';
-import { rread, createGenerador, setAvance } from '../services/db.js';
+import { loadObra, getConceptoById, resolveConceptoKeyLocal, createGenerador, setAvance } from '../services/db.js';
 import { state } from '../state/store.js';
 import { navigate } from '../state/router.js';
 import { money, dateMx, num, num0, pct } from '../util/format.js';
@@ -12,7 +12,7 @@ export async function renderEstimacion({ params }) {
 
   renderShell(crumbs(obraId, '...', estId), h('div', { class: 'empty' }, 'Cargando…'));
 
-  const obra = await rread(`obras/${obraId}`);
+  const obra = await loadObra(obraId);
   if (!obra) { renderShell(crumbs(obraId, '?', estId), h('div', { class: 'empty' }, 'Obra no encontrada.')); return; }
   const m = obra.meta || {};
   const est = obra.estimaciones?.[estId];
@@ -30,7 +30,7 @@ export async function renderEstimacion({ params }) {
   // Subtotal calculado
   let subtotal = 0;
   const generadoresRows = gensInEstim.map(([gid, g]) => {
-    const c = conceptos[g.conceptoId];
+    const c = getConceptoById(obra, g.conceptoId);
     const cant = c ? calcGeneradorTotal(c, g) : 0;
     const importe = cant * (c?.precio_unitario || 0);
     subtotal += importe;
@@ -51,14 +51,18 @@ export async function renderEstimacion({ params }) {
     ]);
   });
 
-  // Avances sin generador (se capturan directo)
-  const conceptosUsadosConGen = new Set(gensInEstim.map(([_, g]) => g.conceptoId));
+  // Avances sin generador. Comparamos por conceptoKey resuelto para que un
+  // generador legacy y un avance con la misma identidad no se dupliquen.
+  const conceptosUsadosConGen = new Set(
+    gensInEstim.map(([_, g]) => resolveConceptoKeyLocal(obra, g.conceptoId)).filter(Boolean)
+  );
   const avancesDirectos = [];
   for (const [cid, byEstim] of Object.entries(avances)) {
-    if (conceptosUsadosConGen.has(cid)) continue;
+    const k = resolveConceptoKeyLocal(obra, cid);
+    if (!k || conceptosUsadosConGen.has(k)) continue;
     const cant = Number(byEstim?.[estId]) || 0;
     if (!cant) continue;
-    const c = conceptos[cid];
+    const c = conceptos[k];
     if (!c) continue;
     const importe = cant * (c.precio_unitario || 0);
     subtotal += importe;
@@ -190,16 +194,15 @@ async function pickConceptoDialog(obra, obraId, estId, conceptos) {
 }
 
 async function startNewGenerador(obraId, estId, conceptoId, concepto) {
-  // Si el concepto no tiene plantilla, pídela ahora
   if (!concepto.plantillaTipo) {
     const ok = await pickPlantillaDialog(obraId, conceptoId, concepto);
     if (!ok) return;
+    // pickPlantillaDialog mutó concepto.plantillaTipo / plantillaConfig al guardar
   }
-  // Crea generador vacío y navega al editor
   try {
     const gid = await createGenerador(obraId, {
       conceptoId, estimacionId: estId,
-      plantillaTipo: (await rread(`obras/${obraId}/catalogo/conceptos/${conceptoId}/plantillaTipo`)),
+      plantillaTipo: concepto.plantillaTipo,
       partidas: [],
       ajustes: [],
       totalEjecutado: 0,
@@ -250,6 +253,10 @@ async function pickPlantillaDialog(obraId, conceptoId, concepto) {
       }
       const { setPlantillaConcepto } = await import('../services/db.js');
       await setPlantillaConcepto(obraId, conceptoId, chosen, chosen === 'personalizado' ? customConfig : null);
+      // Mutamos el concepto en memoria para que el caller (startNewGenerador)
+      // lea la plantilla recién seteada sin re-fetch.
+      concepto.plantillaTipo = chosen;
+      concepto.plantillaConfig = chosen === 'personalizado' ? customConfig : null;
       return true;
     }
   });

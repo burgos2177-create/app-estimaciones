@@ -25,20 +25,30 @@ function safeName(s, fallback = 'documento') {
 }
 
 // ===== Helpers de cómputo =====
-function buildExecMap(conceptos, generadores, avances) {
+// Resuelve un conceptoId que puede ser legacy → conceptoKey actual del catálogo.
+function resolveKey(conceptos, migrationKeyMap, id) {
+  if (!id) return null;
+  if (conceptos[id]) return id;
+  if (migrationKeyMap && migrationKeyMap[id] && conceptos[migrationKeyMap[id]]) return migrationKeyMap[id];
+  return null;
+}
+
+function buildExecMap(conceptos, generadores, avances, migrationKeyMap) {
   const ejecMap = {};
   for (const cid of Object.keys(conceptos)) ejecMap[cid] = {};
   for (const g of Object.values(generadores || {})) {
-    if (!ejecMap[g.conceptoId]) continue;
-    const c = conceptos[g.conceptoId];
+    const k = resolveKey(conceptos, migrationKeyMap, g.conceptoId);
+    if (!k || !ejecMap[k]) continue;
+    const c = conceptos[k];
     const cant = calcGeneradorTotal(c, g);
-    ejecMap[g.conceptoId][g.estimacionId] = (ejecMap[g.conceptoId][g.estimacionId] || 0) + cant;
+    ejecMap[k][g.estimacionId] = (ejecMap[k][g.estimacionId] || 0) + cant;
   }
   for (const [cid, byEst] of Object.entries(avances || {})) {
-    if (!ejecMap[cid]) continue;
+    const k = resolveKey(conceptos, migrationKeyMap, cid);
+    if (!k || !ejecMap[k]) continue;
     for (const [eid, cant] of Object.entries(byEst)) {
-      if (ejecMap[cid][eid] != null) continue;
-      ejecMap[cid][eid] = Number(cant) || 0;
+      if (ejecMap[k][eid] != null) continue;
+      ejecMap[k][eid] = Number(cant) || 0;
     }
   }
   return ejecMap;
@@ -52,7 +62,7 @@ export function exportF1Xlsx(obra) {
   const m = obra.meta || {};
   const conceptos = filterCatalogo(obra.catalogo?.conceptos || {});
   const estims = sortedEstims(obra.estimaciones || {});
-  const ejecMap = buildExecMap(obra.catalogo?.conceptos || {}, obra.generadores || {}, obra.avances || {});
+  const ejecMap = buildExecMap(obra.catalogo?.conceptos || {}, obra.generadores || {}, obra.avances || {}, obra.catalogo?.migrationKeyMap);
 
   const totalPpto = conceptos.reduce((s, c) => s + (c.total || 0), 0);
 
@@ -150,7 +160,7 @@ export function exportF1Pdf(obra) {
   const m = obra.meta || {};
   const conceptos = filterCatalogo(obra.catalogo?.conceptos || {});
   const estims = sortedEstims(obra.estimaciones || {});
-  const ejecMap = buildExecMap(obra.catalogo?.conceptos || {}, obra.generadores || {}, obra.avances || {});
+  const ejecMap = buildExecMap(obra.catalogo?.conceptos || {}, obra.generadores || {}, obra.avances || {}, obra.catalogo?.migrationKeyMap);
 
   const { jsPDF } = window.jspdf;
   const doc = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'letter' });
@@ -246,7 +256,7 @@ export function buildResumenData(obra, estId) {
   const conceptosAll = obra.catalogo?.conceptos || {};
   const conceptos = filterCatalogo(conceptosAll);
   const estims = sortedEstims(obra.estimaciones || {});
-  const ejecMap = buildExecMap(conceptosAll, obra.generadores || {}, obra.avances || {});
+  const ejecMap = buildExecMap(conceptosAll, obra.generadores || {}, obra.avances || {}, obra.catalogo?.migrationKeyMap);
   const ivaPct = Number(m.ivaPct ?? 0.16);
   const anticipoPct = Number(m.anticipoPct ?? 0);
 
@@ -337,15 +347,18 @@ async function blobUrlToDataUrl(url) {
 function collectAttachments(obra, estId) {
   const generadores = obra.generadores || {};
   const conceptos = obra.catalogo?.conceptos || {};
-  const groups = new Map();   // conceptoId → { clave, descripcion, items: [{kind, ...att, generadorNumero}] }
+  const keyMap = obra.catalogo?.migrationKeyMap;
+  const groups = new Map();   // conceptoKey → { clave, descripcion, items: [...] }
   for (const [gid, gen] of Object.entries(generadores)) {
     if (gen.estimacionId !== estId) continue;
-    const concepto = conceptos[gen.conceptoId] || {};
+    const k = resolveKey(conceptos, keyMap, gen.conceptoId);
+    if (!k) continue;
+    const concepto = conceptos[k];
     const ensure = () => {
-      if (!groups.has(gen.conceptoId)) {
-        groups.set(gen.conceptoId, { clave: concepto.clave || '', descripcion: concepto.descripcion || '', items: [] });
+      if (!groups.has(k)) {
+        groups.set(k, { clave: concepto.clave || '', descripcion: concepto.descripcion || '', items: [] });
       }
-      return groups.get(gen.conceptoId);
+      return groups.get(k);
     };
     for (const att of (gen.croquis || [])) ensure().items.push({ ...att, kind: 'croquis', generadorNumero: gen.numero });
     for (const att of (gen.fotos || [])) ensure().items.push({ ...att, kind: 'foto', generadorNumero: gen.numero });

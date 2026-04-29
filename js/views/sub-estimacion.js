@@ -3,7 +3,8 @@
 
 import { h, modal, toast } from '../util/dom.js';
 import { renderShell } from './shell.js';
-import { rread, setSubEstimacionAvance, setPagoSub, cerrarSubEstimacion, reabrirSubEstimacion,
+import { rread, loadObra, buildConceptosLookup, setSubEstimacionAvance, setPagoSub,
+         cerrarSubEstimacion, reabrirSubEstimacion,
          getObraLinks, listBuzonItems, pushBuzonItem, updateBuzonItem } from '../services/db.js';
 import { state } from '../state/store.js';
 import { navigate, dispatch } from '../state/router.js';
@@ -13,7 +14,7 @@ export async function renderSubEstimacion({ params }) {
   const { id: obraId, subid: subId, eid } = params;
   renderShell(crumbs(obraId, '...', subId, '...', eid), h('div', { class: 'empty' }, 'Cargando…'));
 
-  const obra = await rread(`obras/${obraId}`);
+  const obra = await loadObra(obraId);
   const sub = obra?.subcontratos?.[subId];
   const est = sub?.estimaciones?.[eid];
   if (!obra || !sub || !est) {
@@ -22,7 +23,7 @@ export async function renderSubEstimacion({ params }) {
   }
   const m = obra.meta || {};
   const meta = sub.meta || {};
-  const conceptosAll = obra.catalogo?.conceptos || {};
+  const conceptosAll = buildConceptosLookup(obra);
   const conceptosSub = sub.conceptos || [];
   const ganador = sub.licitantes?.[meta.licitanteAdjudicadoId];
   if (!ganador) {

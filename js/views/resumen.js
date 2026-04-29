@@ -4,7 +4,7 @@
 
 import { h, modal, toast } from '../util/dom.js';
 import { renderShell } from './shell.js';
-import { rread, setPagoCliente, getObraLinks, listBuzonItems, pushBuzonItem, updateBuzonItem } from '../services/db.js';
+import { rread, loadObra, setPagoCliente, getObraLinks, listBuzonItems, pushBuzonItem, updateBuzonItem } from '../services/db.js';
 import { state } from '../state/store.js';
 import { money, num, dateMx, pct } from '../util/format.js';
 import { buildResumenData, exportResumenPdf, exportResumenXlsx, exportEstimacionJson } from '../services/export.js';
@@ -13,7 +13,7 @@ export async function renderResumen({ params }) {
   const obraId = params.id;
   renderShell(crumbs(obraId), h('div', { class: 'empty' }, 'Cargando RESUMEN…'));
 
-  const obra = await rread(`obras/${obraId}`);
+  const obra = await loadObra(obraId);
   if (!obra) { renderShell(crumbs(obraId), h('div', { class: 'empty' }, 'Obra no encontrada.')); return; }
   const m = obra.meta || {};
   const ests = obra.estimaciones || {};

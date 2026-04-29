@@ -1,6 +1,6 @@
 import { h, modal, toast } from '../util/dom.js';
 import { renderShell } from './shell.js';
-import { rread, createSubcontrato, deleteSubcontrato } from '../services/db.js';
+import { loadObra, getConceptoById, createSubcontrato, deleteSubcontrato } from '../services/db.js';
 import { state } from '../state/store.js';
 import { navigate } from '../state/router.js';
 import { money, num0, dateMx } from '../util/format.js';
@@ -9,11 +9,10 @@ export async function renderSubcontratos({ params }) {
   const obraId = params.id;
   renderShell(crumbs(obraId), h('div', { class: 'empty' }, 'Cargando subcontratos…'));
 
-  const obra = await rread(`obras/${obraId}`);
+  const obra = await loadObra(obraId);
   if (!obra) { renderShell(crumbs(obraId), h('div', { class: 'empty' }, 'Obra no encontrada.')); return; }
   const m = obra.meta || {};
   const subs = obra.subcontratos || {};
-  const conceptosAll = obra.catalogo?.conceptos || {};
 
   const ids = Object.keys(subs).sort((a, b) => (subs[a].meta?.createdAt || 0) - (subs[b].meta?.createdAt || 0));
 
@@ -47,7 +46,7 @@ export async function renderSubcontratos({ params }) {
         const licitantes = sub.licitantes || {};
         const numLic = Object.values(licitantes).filter(l => !l.archivado).length;
         const montoRef = conceptos.reduce((s, c) => {
-          const cat = conceptosAll[c.conceptoId];
+          const cat = getConceptoById(obra, c.conceptoId);
           return s + (Number(c.cantidadSub) || 0) * (cat?.precio_unitario || 0);
         }, 0);
         const mejorTotal = bestLicitanteTotal(conceptos, licitantes);

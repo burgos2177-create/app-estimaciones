@@ -5,7 +5,7 @@
 
 import { h } from '../util/dom.js';
 import { renderShell } from './shell.js';
-import { rread } from '../services/db.js';
+import { loadObra, getConceptoById, resolveConceptoKeyLocal } from '../services/db.js';
 import { money, num, num0, pct } from '../util/format.js';
 import { calcGeneradorTotal } from '../services/plantillas.js';
 import { exportF1Pdf, exportF1Xlsx } from '../services/export.js';
@@ -14,7 +14,7 @@ export async function renderF1({ params }) {
   const obraId = params.id;
   renderShell(crumbs(obraId), h('div', { class: 'empty' }, 'Cargando F-1…'));
 
-  const obra = await rread(`obras/${obraId}`);
+  const obra = await loadObra(obraId);
   if (!obra) { renderShell(crumbs(obraId), h('div', { class: 'empty' }, 'Obra no encontrada.')); return; }
   const m = obra.meta || {};
   const conceptos = obra.catalogo?.conceptos || {};
@@ -31,21 +31,23 @@ export async function renderF1({ params }) {
     .map(([id, e]) => ({ id, ...e }))
     .sort((a, b) => (a.numero || 0) - (b.numero || 0));
 
-  // Cantidad ejecutada por (concepto, estimación)
+  // Cantidad ejecutada por (concepto, estimación). conceptoIds en generadores y
+  // avances pueden ser legacy o conceptoKey: los resolvemos al iterar.
   const ejecMap = {};
   for (const c of conceptosArr) ejecMap[c.id] = {};
   for (const g of Object.values(generadores)) {
-    if (!ejecMap[g.conceptoId]) continue;
-    const concepto = conceptos[g.conceptoId];
+    const k = resolveConceptoKeyLocal(obra, g.conceptoId);
+    if (!k || !ejecMap[k]) continue;
+    const concepto = conceptos[k];
     const cant = calcGeneradorTotal(concepto, g);
-    ejecMap[g.conceptoId][g.estimacionId] = (ejecMap[g.conceptoId][g.estimacionId] || 0) + cant;
+    ejecMap[k][g.estimacionId] = (ejecMap[k][g.estimacionId] || 0) + cant;
   }
-  // Avances directos donde no hay generador
   for (const [cid, byEst] of Object.entries(avances)) {
-    if (!ejecMap[cid]) continue;
+    const k = resolveConceptoKeyLocal(obra, cid);
+    if (!k || !ejecMap[k]) continue;
     for (const [eid, cant] of Object.entries(byEst)) {
-      if (ejecMap[cid][eid] != null) continue;
-      ejecMap[cid][eid] = Number(cant) || 0;
+      if (ejecMap[k][eid] != null) continue;
+      ejecMap[k][eid] = Number(cant) || 0;
     }
   }
 

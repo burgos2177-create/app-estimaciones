@@ -3,7 +3,7 @@
 
 import { h, toast, modal } from '../util/dom.js';
 import { renderShell } from './shell.js';
-import { rread } from '../services/db.js';
+import { loadObra, getConceptoById } from '../services/db.js';
 import { state } from '../state/store.js';
 import { navigate } from '../state/router.js';
 import { dateMx, num0 } from '../util/format.js';
@@ -16,19 +16,18 @@ export async function renderGaleria({ params }) {
 
   renderShell(crumbs(obraId, '...', estId), h('div', { class: 'empty' }, 'Cargando galería…'));
 
-  const obra = await rread(`obras/${obraId}`);
+  const obra = await loadObra(obraId);
   if (!obra) { renderShell(crumbs(obraId, '?', estId), h('div', { class: 'empty' }, 'Obra no encontrada.')); return; }
   const m = obra.meta || {};
   const est = obra.estimaciones?.[estId];
   if (!est) { renderShell(crumbs(obraId, m.nombre, estId), h('div', { class: 'empty' }, 'Estimación no encontrada.')); return; }
   const generadores = obra.generadores || {};
-  const conceptos = obra.catalogo?.conceptos || {};
 
   // Reunir todos los adjuntos de generadores en esta estimación
   const items = [];
   for (const [gid, gen] of Object.entries(generadores)) {
     if (gen.estimacionId !== estId) continue;
-    const concepto = conceptos[gen.conceptoId] || {};
+    const concepto = getConceptoById(obra, gen.conceptoId) || {};
     for (const att of (gen.croquis || [])) {
       items.push({ ...att, kind: 'croquis', generadorId: gid, generadorNumero: gen.numero, conceptoId: gen.conceptoId, clave: concepto.clave || '?', descripcion: concepto.descripcion || '' });
     }

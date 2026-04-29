@@ -1,6 +1,6 @@
 import { h } from '../util/dom.js';
 import { renderShell } from './shell.js';
-import { rread } from '../services/db.js';
+import { rread, loadObra } from '../services/db.js';
 import { money, num, num0 } from '../util/format.js';
 import { navigate } from '../state/router.js';
 
@@ -8,10 +8,9 @@ export async function renderCatalogo({ params }) {
   const obraId = params.id;
   renderShell(crumbs(obraId), h('div', { class: 'empty' }, 'Cargando catálogo…'));
 
-  const [obra, catalogo] = await Promise.all([
-    rread(`obras/${obraId}/meta`),
-    rread(`obras/${obraId}/catalogo`)
-  ]);
+  const obraFull = await loadObra(obraId);
+  const obra = obraFull?.meta || null;
+  const catalogo = obraFull?.catalogo || null;
 
   if (!catalogo || !catalogo.conceptos) {
     renderShell(crumbs(obraId, obra?.nombre), h('div', { class: 'empty' }, [

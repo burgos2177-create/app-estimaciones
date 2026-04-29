@@ -3,6 +3,7 @@ import {
 } from 'https://www.gstatic.com/firebasejs/10.13.2/firebase-database.js';
 import { db } from './firebase.js';
 import { APP_BASE_PATH } from '../config/firebase-config.js';
+import { computeStableKey, computeConceptoKey, sanitizeConcepto } from './catalogo-keys.js';
 
 // Prefija toda path relativa con APP_BASE_PATH (e.g. "obras/X" → "legacy/estimaciones/obras/X").
 // Para escapes que necesiten path absoluto en el RTDB compartido (p.ej. /shared/buzon),
@@ -93,51 +94,204 @@ export async function deleteObra(obraId) {
 }
 
 // === Catálogo OPUS ===
-export async function saveCatalogo(obraId, catalogo) {
-  // catalogo = { sourceFileName, importedAt, conceptos: { id → concepto } }
-  await set(_ref(`obras/${obraId}/catalogo`), catalogo);
+//
+// Fuente de verdad: `/shared/catalogos/{obraId}` (compartido con bitácora).
+// Compatibilidad: si una obra todavía no se migra, sigue viviendo en
+// `obras/{obraId}/catalogo` (legacy). `loadObra` y los writers detectan dónde
+// está la fuente y ajustan su comportamiento.
+
+// Carga la obra completa con su catálogo resuelto. Si la obra está migrada,
+// `obra.catalogo.conceptos` viene de /shared y `_source === 'shared'`. Si no,
+// `_source === 'legacy'`.
+export async function loadObra(obraId) {
+  const [obra, shared] = await Promise.all([
+    rread(`obras/${obraId}`),
+    rread(`/shared/catalogos/${obraId}`)
+  ]);
+  if (!obra) return null;
+  if (shared?.conceptos) {
+    obra.catalogo = {
+      sourceFileName: shared.meta?.sourceFileName ?? null,
+      importedAt: shared.meta?.importedAt ?? null,
+      migratedAt: obra.catalogo?.migratedAt ?? shared.meta?.migratedFromLegacyAt ?? null,
+      migrationKeyMap: obra.catalogo?.migrationKeyMap ?? null,
+      conceptos: shared.conceptos,
+      _source: 'shared',
+      _meta: shared.meta
+    };
+  } else if (obra.catalogo) {
+    obra.catalogo._source = 'legacy';
+  }
+  return obra;
+}
+
+// Resuelve un conceptoId a su concepto en obra.catalogo.conceptos. Si el ID es
+// legacy y el catálogo está en /shared, mapea via migrationKeyMap. Devuelve null
+// si no se encuentra.
+export function getConceptoById(obra, conceptoId) {
+  const conceptos = obra?.catalogo?.conceptos;
+  if (!conceptos || !conceptoId) return null;
+  if (conceptos[conceptoId]) return conceptos[conceptoId];
+  const map = obra?.catalogo?.migrationKeyMap;
+  if (map && map[conceptoId] && conceptos[map[conceptoId]]) return conceptos[map[conceptoId]];
+  return null;
+}
+
+// Devuelve la key efectiva del concepto en obra.catalogo.conceptos para un
+// conceptoId que puede ser legacy o ya migrado. Para views que usan el ID como
+// clave en sus propios maps (ejecMap, avances, etc.) sin re-leer RTDB.
+export function resolveConceptoKeyLocal(obra, conceptoId) {
+  const conceptos = obra?.catalogo?.conceptos;
+  if (!conceptos || !conceptoId) return null;
+  if (conceptos[conceptoId]) return conceptoId;
+  const map = obra?.catalogo?.migrationKeyMap;
+  if (map && map[conceptoId] && conceptos[map[conceptoId]]) return map[conceptoId];
+  return null;
+}
+
+// Devuelve un lookup donde tanto conceptoKey como legacyId resuelven al concepto.
+// Útil para views que pasan `conceptosAll` a varios helpers internos y hacen
+// muchos lookups por ID (subcontrato, sub-estimación). Iterar ESTE objeto
+// duplicaría conceptos — para iterar usar `obra.catalogo.conceptos` directo.
+export function buildConceptosLookup(obra) {
+  const conceptos = obra?.catalogo?.conceptos || {};
+  const map = obra?.catalogo?.migrationKeyMap;
+  if (!map) return conceptos;
+  const lookup = { ...conceptos };
+  for (const [legacyId, conceptoKey] of Object.entries(map)) {
+    if (lookup[conceptoKey] && !(legacyId in lookup)) {
+      lookup[legacyId] = lookup[conceptoKey];
+    }
+  }
+  return lookup;
+}
+
+// Resuelve un conceptoId legacy → conceptoKey actual (para writers que necesitan
+// la key correcta en /shared). Si no hay map o el ID no está mapeado, regresa el
+// mismo ID (caso obra no migrada o concepto recién creado con key shared).
+export async function resolveConceptoKey(obraId, conceptoId) {
+  const map = await rread(`obras/${obraId}/catalogo/migrationKeyMap`);
+  return map && map[conceptoId] ? map[conceptoId] : conceptoId;
 }
 
 export async function reconcileCatalogo(obraId, nuevosConceptos, sourceFileName) {
-  // Reemplaza el catálogo respetando la jerarquía del XLS. Reglas:
-  //  · TODOS los conceptos del XLS se conservan, sin dedupe agresivo. La misma clave puede
-  //    aparecer en múltiples partidas (Torre 1, Torre 2, etc.) y son conceptos distintos.
-  //  · Identidad estable de un concepto = (tipo, path completo, clave). Eso permite que al
-  //    re-importar el mismo XLS, los generadores existentes sigan apuntando al mismo ID.
-  //  · Si misma identidad aparece varias veces en el XLS (caso raro), cada repetición se
-  //    inserta con su propio ID nuevo (no se pierde nada).
-  //  · Conceptos viejos cuya identidad ya no existe pero tienen generadores/avances se
-  //    conservan archivados.
+  // Decide dónde escribir: /shared si la obra está migrada O si no tiene
+  // catálogo legacy aún (primera importación → directo a /shared).
+  const [sharedMeta, legacyConceptos] = await Promise.all([
+    rread(`/shared/catalogos/${obraId}/meta`),
+    rread(`obras/${obraId}/catalogo/conceptos`)
+  ]);
+  if (sharedMeta || !legacyConceptos) {
+    return reconcileCatalogoShared(obraId, nuevosConceptos, sourceFileName, sharedMeta);
+  }
+  return reconcileCatalogoLegacy(obraId, nuevosConceptos, sourceFileName);
+}
+
+// Re-import contra /shared. Reglas:
+//  · conceptoKey determinístico desde (tipo, path, clave) — re-import idempotente.
+//  · Si dos conceptos del XLS colapsan al mismo conceptoKey (mismas filas
+//    idénticas), se desambigua con sufijo `_2`, `_3`…
+//  · Plantillas (plantillaTipo/plantillaConfig) preservadas del shared previo
+//    cuando el conceptoKey coincide.
+//  · Conceptos shared previos cuya conceptoKey ya no aparece en el nuevo XLS
+//    se archivan (archivado=true) si tienen generadores/avances apuntando.
+//    Si nadie los referencia, se descartan.
+async function reconcileCatalogoShared(obraId, nuevosConceptos, sourceFileName, sharedMeta) {
+  const [prevConceptos, generadores, avances, keyMap] = await Promise.all([
+    rread(`/shared/catalogos/${obraId}/conceptos`),
+    rread(`obras/${obraId}/generadores`),
+    rread(`obras/${obraId}/avances`),
+    rread(`obras/${obraId}/catalogo/migrationKeyMap`)
+  ]);
+  const prev = prevConceptos || {};
+
+  // IDs referenciados (puede haber legacyIds o conceptoKeys; resolvemos ambos)
+  const referenciadasKeys = new Set();
+  const resolveRef = id => (keyMap && keyMap[id]) ? keyMap[id] : id;
+  for (const g of Object.values(generadores || {})) {
+    if (g.conceptoId) referenciadasKeys.add(resolveRef(g.conceptoId));
+  }
+  for (const id of Object.keys(avances || {})) referenciadasKeys.add(resolveRef(id));
+
+  const merged = {};
+  const usedBaseCount = new Map();
+
+  for (const c of nuevosConceptos) {
+    const baseKey = computeConceptoKey(c);
+    const count = usedBaseCount.get(baseKey) || 0;
+    const finalKey = count === 0 ? baseKey : `${baseKey}_${count + 1}`;
+    usedBaseCount.set(baseKey, count + 1);
+
+    const previo = prev[finalKey];
+    merged[finalKey] = {
+      ...sanitizeConcepto(c),
+      plantillaTipo: previo?.plantillaTipo ?? null,
+      plantillaConfig: previo?.plantillaConfig ?? null,
+      archivado: false
+    };
+  }
+
+  // Conservar archivados los previos cuya identidad ya no existe pero tienen refs
+  for (const [k, c] of Object.entries(prev)) {
+    if (merged[k]) continue;
+    if (referenciadasKeys.has(k)) {
+      merged[k] = { ...c, archivado: true };
+    }
+  }
+
+  const totalPUs = Object.values(merged)
+    .filter(c => c.tipo === 'precio_unitario' && !c.archivado)
+    .reduce((s, c) => s + (c.total || 0), 0);
+  const totalRaices = Object.values(merged)
+    .filter(c => c.tipo === 'agrupador' && c.nivel === 0 && !c.archivado)
+    .reduce((s, c) => s + (c.total || 0), 0);
+
+  const nuevaMeta = {
+    sourceFileName,
+    importedAt: Date.now(),
+    version: (sharedMeta?.version || 0) + 1,
+    hash: null,
+    totalPUs,
+    totalRaices,
+    conceptosCount: Object.keys(merged).length,
+    // Preservar metadata histórica de la migración inicial
+    migratedFromLegacyAt: sharedMeta?.migratedFromLegacyAt || null,
+    migratedByUid: sharedMeta?.migratedByUid || null
+  };
+
+  await set(_ref(`/shared/catalogos/${obraId}`), {
+    meta: nuevaMeta,
+    conceptos: merged
+  });
+  return merged;
+}
+
+// Re-import legacy (path antiguo, solo si la obra no está migrada).
+// Comportamiento histórico, conservado por compatibilidad. Una obra creada
+// post-A3 nunca llega aquí (siempre cae en reconcileCatalogoShared).
+async function reconcileCatalogoLegacy(obraId, nuevosConceptos, sourceFileName) {
   const prevConceptos = await rread(`obras/${obraId}/catalogo/conceptos`) || {};
   const generadores = await rread(`obras/${obraId}/generadores`) || {};
   const avances = await rread(`obras/${obraId}/avances`) || {};
 
-  const stableKey = c => {
-    const pathStr = (c.path || []).map(p => `${p?.clave || ''}|${p?.descripcion || ''}`).join('>>');
-    return `${c.tipo || ''}::${pathStr}::${c.clave || ''}`;
-  };
+  const stableKeyOf = c => computeStableKey(c);
 
-  // Snapshot por clave estable → datos del previo
   const prevByStable = new Map();
   for (const [id, c] of Object.entries(prevConceptos)) {
-    const k = stableKey(c);
+    const k = stableKeyOf(c);
     if (!prevByStable.has(k)) {
       prevByStable.set(k, { id, plantillaTipo: c.plantillaTipo, plantillaConfig: c.plantillaConfig });
     }
   }
-
-  // IDs referenciados por generadores/avances
   const referenciados = new Set();
   for (const g of Object.values(generadores)) if (g.conceptoId) referenciados.add(g.conceptoId);
   for (const cid of Object.keys(avances)) referenciados.add(cid);
 
   const merged = {};
-
   for (const c of nuevosConceptos) {
-    const k = stableKey(c);
+    const k = stableKeyOf(c);
     const previo = prevByStable.get(k);
     let id = previo?.id || c.id;
-    // Si por algún motivo varios nuevos colapsan al mismo ID (misma identidad), forzar nuevo
     if (merged[id]) {
       id = c.id;
       let i = 0;
@@ -160,16 +314,13 @@ export async function reconcileCatalogo(obraId, nuevosConceptos, sourceFileName)
       archivado: false
     };
   }
-
-  // Conservar archivados los previos con referencias cuya identidad ya no existe
-  const newKeys = new Set(nuevosConceptos.map(stableKey));
+  const newKeys = new Set(nuevosConceptos.map(stableKeyOf));
   for (const [id, c] of Object.entries(prevConceptos)) {
-    if (newKeys.has(stableKey(c))) continue;
+    if (newKeys.has(stableKeyOf(c))) continue;
     if (referenciados.has(id)) {
       if (!merged[id]) merged[id] = { ...c, archivado: true };
     }
   }
-
   await set(_ref(`obras/${obraId}/catalogo`), {
     sourceFileName,
     importedAt: Date.now(),
@@ -179,9 +330,19 @@ export async function reconcileCatalogo(obraId, nuevosConceptos, sourceFileName)
 }
 
 export async function setPlantillaConcepto(obraId, conceptoId, plantillaTipo, plantillaConfig = null) {
-  await update(_ref(`obras/${obraId}/catalogo/conceptos/${conceptoId}`), {
-    plantillaTipo, plantillaConfig
-  });
+  // Detecta dónde vive el catálogo. Si está en /shared, escribimos ahí (mapeando
+  // legacyId si hace falta). Si solo hay legacy, mantenemos el comportamiento viejo.
+  const sharedMeta = await rread(`/shared/catalogos/${obraId}/meta`);
+  if (sharedMeta) {
+    const key = await resolveConceptoKey(obraId, conceptoId);
+    await update(_ref(`/shared/catalogos/${obraId}/conceptos/${key}`), {
+      plantillaTipo, plantillaConfig
+    });
+  } else {
+    await update(_ref(`obras/${obraId}/catalogo/conceptos/${conceptoId}`), {
+      plantillaTipo, plantillaConfig
+    });
+  }
 }
 
 // === Estimaciones ===

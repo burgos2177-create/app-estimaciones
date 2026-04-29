@@ -1,6 +1,6 @@
 import { h, mount, toast, modal } from '../util/dom.js';
 import { renderShell } from './shell.js';
-import { rread, saveGenerador, addGeneradorAttachment, removeGeneradorAttachment } from '../services/db.js';
+import { loadObra, getConceptoById, saveGenerador, addGeneradorAttachment, removeGeneradorAttachment } from '../services/db.js';
 import { state } from '../state/store.js';
 import { navigate } from '../state/router.js';
 import { money, num, num0, dateMx } from '../util/format.js';
@@ -13,14 +13,14 @@ export async function renderGenerador({ params }) {
 
   renderShell([{ label: 'Obras', to: '/' }, { label: 'cargando…' }], h('div', { class: 'empty' }, 'Cargando…'));
 
-  const obra = await rread(`obras/${obraId}`);
+  const obra = await loadObra(obraId);
   const est = obra?.estimaciones?.[estId];
   const gen = obra?.generadores?.[gid];
   if (!obra || !est || !gen) {
     renderShell([{ label: 'Obras', to: '/' }], h('div', { class: 'empty' }, 'Generador no encontrado.'));
     return;
   }
-  const concepto = obra.catalogo?.conceptos?.[gen.conceptoId];
+  const concepto = getConceptoById(obra, gen.conceptoId);
   if (!concepto) {
     renderShell([{ label: 'Obras', to: '/' }], h('div', { class: 'empty' }, 'El concepto del catálogo ya no existe (¿re-importado y archivado?).'));
     return;

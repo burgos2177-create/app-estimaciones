@@ -1,7 +1,7 @@
 import { h, toast, modal } from '../util/dom.js';
 import { renderShell } from './shell.js';
 import { state, setState } from '../state/store.js';
-import { rread, updateObraMeta, reconcileCatalogo } from '../services/db.js';
+import { rread, loadObra, updateObraMeta, reconcileCatalogo } from '../services/db.js';
 import { parseOpusXLS } from '../services/opus-parser.js';
 import { navigate } from '../state/router.js';
 import { money, dateMx, num0, pct } from '../util/format.js';
@@ -13,7 +13,7 @@ export async function renderObra({ params }) {
   setState({ obraActual: obraId });
   renderShell(crumbs(obraId), h('div', { class: 'empty' }, 'Cargando obra…'));
 
-  const obra = await rread(`obras/${obraId}`);
+  const obra = await loadObra(obraId);
   if (!obra) {
     renderShell(crumbs(obraId), h('div', { class: 'empty' }, 'Obra no encontrada.'));
     return;
