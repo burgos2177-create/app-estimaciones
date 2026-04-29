@@ -150,13 +150,17 @@ export async function renderSubEstimacion({ params }) {
     tbody
   ]);
 
-  // Estado del buzón para este pago al sub (para badges y bloqueo)
+  // Estado del buzón para este pago al sub. Si hay varios items históricos
+  // (p.ej. uno rechazado + uno re-enviado), el ACTIVO (pendiente/aprobado/
+  // huerfano) prevalece sobre el rechazado.
   let buzonItems = {};
   try { buzonItems = await listBuzonItems(); } catch {}
-  const buzonItem = Object.values(buzonItems).find(it =>
+  const matching = Object.values(buzonItems).filter(it =>
     it?.tipo === 'estimacion_subcontratista' &&
     it?.obraId === obraId && it?.subcontratoId === subId && it?.subEstimacionId === eid
   );
+  const activo = matching.find(it => it.estado !== 'rechazado');
+  const buzonItem = activo || matching.sort((a, b) => (b.creadoAt || 0) - (a.creadoAt || 0))[0] || null;
   const buzonEstado = buzonItem?.estado || null;
 
   const editPagoBtn = h('button', { class: 'btn sm ghost', onClick: () => editPagoSubDialog() },

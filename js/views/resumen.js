@@ -37,12 +37,16 @@ export async function renderResumen({ params }) {
 }
 
 async function draw(obraId, obra, estId) {
-  // Buzón state para esta estimación (para badges y bloqueo de edición)
+  // Buzón state para esta estimación (para badges y bloqueo de edición).
+  // Si hay varios items históricos (p.ej. uno rechazado + uno re-enviado),
+  // el ACTIVO (pendiente/aprobado/huerfano) prevalece sobre el rechazado.
   let buzonItems = {};
   try { buzonItems = await listBuzonItems(); } catch {}
-  const buzonItem = Object.values(buzonItems).find(it =>
+  const matching = Object.values(buzonItems).filter(it =>
     it?.tipo === 'pago_cliente' && it?.obraId === obraId && it?.estimId === estId
   );
+  const activo = matching.find(it => it.estado !== 'rechazado');
+  const buzonItem = activo || matching.sort((a, b) => (b.creadoAt || 0) - (a.creadoAt || 0))[0] || null;
   const buzonEstado = buzonItem?.estado || null;
   const m = obra.meta || {};
   const ests = obra.estimaciones || {};
@@ -222,12 +226,11 @@ async function editPagoDialog(obraId, estId, est, ivaPct) {
   // desde estimaciones (evita inconsistencia con el movimiento contable creado).
   // Para correcciones reales, el contador edita en bitácora o rechaza el buzón.
   const items = await listBuzonItems();
-  const aprobado = Object.entries(items).find(([_, it]) =>
-    it?.tipo === 'pago_cliente' &&
-    it?.obraId === obraId &&
-    it?.estimId === estId &&
-    it?.estado === 'aprobado'
+  // Buscar el item ACTIVO (no rechazado). Solo bloqueamos si está aprobado.
+  const matchingPC = Object.entries(items).filter(([_, it]) =>
+    it?.tipo === 'pago_cliente' && it?.obraId === obraId && it?.estimId === estId
   );
+  const aprobado = matchingPC.find(([_, it]) => it.estado === 'aprobado');
 
   if (aprobado) {
     const [, it] = aprobado;
