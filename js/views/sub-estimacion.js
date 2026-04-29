@@ -383,8 +383,35 @@ export async function renderSubEstimacion({ params }) {
           const ivaVal = conIva ? (Number(ivaIn.value) || 0) : 0;
           const importe = conIva ? (Number(importeIn.value) || subtotal + ivaVal) : subtotal;
           const pago = { subtotal, iva: ivaVal, importe, conIva, fecha: fechaIn.value ? new Date(fechaIn.value).getTime() : Date.now() };
+
+          // Desglose por concepto OPUS: cada concepto del sub con cantidad > 0
+          // en esta estimación contribuye con cantidad × P.U. del adjudicado.
+          // Si el subtotal capturado difiere del subtotal calculado (porque el
+          // ingeniero ajustó manualmente), escalamos proporcionalmente para
+          // que la suma del desglose cuadre con el subtotal real del pago.
+          const desgloseRaw = [];
+          let subtotalCalcReal = 0;
+          for (const cs of conceptosSub) {
+            const cant = Number(localAvances[cs.conceptoId]) || 0;
+            if (cant <= 0) continue;
+            const puSub = Number(ganador.precios?.[cs.conceptoId]) || 0;
+            const cat = conceptosAll[cs.conceptoId];
+            if (!cat) continue;
+            const importeRaw = cant * puSub;
+            subtotalCalcReal += importeRaw;
+            desgloseRaw.push({ clave: cat.clave || '', descripcion: cat.descripcion || '', cantidad: cant, precioUnitario: puSub, importeRaw });
+          }
+          const factor = (subtotalCalcReal > 0 && subtotal > 0) ? (subtotal / subtotalCalcReal) : 1;
+          const desglose = desgloseRaw.map(d => ({
+            clave: d.clave,
+            descripcion: d.descripcion,
+            cantidad: d.cantidad,
+            precioUnitario: d.precioUnitario,
+            importe: Number((d.importeRaw * factor).toFixed(2))
+          }));
+
           await setPagoSub(obraId, subId, eid, pago);
-          await sincronizarPagoSubConBuzon(obraId, subId, eid, sub, est, ganador, pago);
+          await sincronizarPagoSubConBuzon(obraId, subId, eid, sub, est, ganador, pago, desglose);
           toast('Pago guardado y enviado al buzón del contador', 'ok');
           dispatch();
           return true;
@@ -400,7 +427,10 @@ export async function renderSubEstimacion({ params }) {
 
 // Sincroniza con /shared/buzon: crea o actualiza item tipo='estimacion_subcontratista'
 // para que el contador apruebe y se vuelva un gasto en bitácora.
-async function sincronizarPagoSubConBuzon(obraId, subId, eid, sub, est, ganador, pago) {
+// `desglose` es opcional: array de { clave, descripcion, cantidad, precioUnitario, importe }
+// que el contador puede mapear automáticamente a `desglose_presupuesto` si la bitácora
+// tiene el catálogo OPUS importado en el proyecto pareado.
+async function sincronizarPagoSubConBuzon(obraId, subId, eid, sub, est, ganador, pago, desglose) {
   const [links, obraMeta] = await Promise.all([
     getObraLinks(),
     rread(`obras/${obraId}/meta`)
@@ -436,6 +466,7 @@ async function sincronizarPagoSubConBuzon(obraId, subId, eid, sub, est, ganador,
     monto: pago,
     fecha: pago.fecha,
     descripcion: `Pago a ${proveedorNombre} — Subcontrato "${subNombre}", estimación #${est.numero}${proyectoId ? '' : ' (obra sin vincular)'}`,
+    desglose: Array.isArray(desglose) ? desglose : null,
     estado: 'pendiente',
     creadoPor: state.user?.uid || ''
   };
