@@ -50,15 +50,24 @@ export async function renderSubcontratos({ params }) {
           return s + (Number(c.cantidadSub) || 0) * (cat?.precio_unitario || 0);
         }, 0);
         const mejorTotal = bestLicitanteTotal(conceptos, licitantes);
+        const desdeCompras = meta._source === 'compras';
         return h('tr', { onClick: () => navigate(`/obras/${obraId}/subcontratos/${id}`), style: { cursor: 'pointer' } }, [
-          h('td', {}, h('b', {}, meta.nombre || '—')),
+          h('td', {}, [
+            h('b', {}, meta.nombre || '—'),
+            desdeCompras && h('span', {
+              class: 'tag',
+              style: { marginLeft: '6px', fontSize: '9px' },
+              title: 'Gestionado desde app de compras'
+            }, '🔗 compras')
+          ]),
           h('td', {}, estadoTag(meta.estado)),
           h('td', {}, num0(conceptos.length)),
           h('td', {}, num0(numLic)),
           h('td', { class: 'num' }, money(montoRef)),
           h('td', { class: 'num' }, mejorTotal != null ? money(mejorTotal) : h('span', { class: 'muted' }, '—')),
           h('td', { class: 'muted' }, meta.createdAt ? dateMx(meta.createdAt) : '—'),
-          h('td', { onClick: e => e.stopPropagation() }, h('button', { class: 'btn sm danger ghost', onClick: () => deleteSubConfirm(obraId, id, meta.nombre) }, '✕'))
+          h('td', { onClick: e => e.stopPropagation() },
+            !desdeCompras && h('button', { class: 'btn sm danger ghost', onClick: () => deleteSubConfirm(obraId, id, meta.nombre) }, '✕'))
         ]);
       }))
     ]);

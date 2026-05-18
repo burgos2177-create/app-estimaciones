@@ -103,10 +103,19 @@ export async function deleteObra(obraId) {
 // Carga la obra completa con su catálogo resuelto. Si la obra está migrada,
 // `obra.catalogo.conceptos` viene de /shared y `_source === 'shared'`. Si no,
 // `_source === 'legacy'`.
+//
+// Además fusiona los subcontratos que viven en app-compras (escritor autoritativo
+// desde 2026-05-18): /shared/compras/obras/{obraId}/subcontratos. Cada uno se
+// adapta al shape esperado por estas vistas (conceptos como array con
+// `cantidadSub`) y se marca con `meta._source = 'compras'` para que las vistas
+// los hagan solo-lectura para alcance/licitantes/adjudicación. Las estimaciones
+// parciales (sub.estimaciones) siguen viviendo en el path legacy — estimaciones
+// es el escritor de esas y compras solo lee desde allá si las necesita.
 export async function loadObra(obraId) {
-  const [obra, shared] = await Promise.all([
+  const [obra, shared, sharedSubs] = await Promise.all([
     rread(`obras/${obraId}`),
-    rread(`/shared/catalogos/${obraId}`)
+    rread(`/shared/catalogos/${obraId}`),
+    rread(`/shared/compras/obras/${obraId}/subcontratos`)
   ]);
   if (!obra) return null;
   if (shared?.conceptos) {
@@ -122,6 +131,34 @@ export async function loadObra(obraId) {
   } else if (obra.catalogo) {
     obra.catalogo._source = 'legacy';
   }
+
+  // Fusionar subcontratos de app-compras. Si un mismo subId existiera en
+  // ambos lados, gana el shared (compras es escritor autoritativo). Las
+  // estimaciones parciales que existían en legacy se preservan bajo el sub
+  // de compras.
+  if (sharedSubs && typeof sharedSubs === 'object') {
+    obra.subcontratos = obra.subcontratos || {};
+    for (const [scId, sc] of Object.entries(sharedSubs)) {
+      if (!sc) continue;
+      const conceptosArr = Object.values(sc.conceptos || {})
+        .filter(c => c && c.conceptoId)
+        .map(c => ({
+          conceptoId: c.conceptoId,
+          // Adaptador: compras usa `cantidad`, estimaciones espera `cantidadSub`
+          cantidadSub: Number(c.cantidad) || 0,
+          costoMaterialSogrub: Number(c.costoMaterialSogrub) || 0,
+          notas: c.notas || ''
+        }));
+      const legacyEstimaciones = obra.subcontratos[scId]?.estimaciones || {};
+      obra.subcontratos[scId] = {
+        meta: { ...(sc.meta || {}), _source: 'compras' },
+        conceptos: conceptosArr,
+        licitantes: sc.licitantes || {},
+        estimaciones: legacyEstimaciones
+      };
+    }
+  }
+
   return obra;
 }
 
@@ -472,7 +509,41 @@ export async function deleteSubcontrato(obraId, subId) {
   await remove(_ref(`obras/${obraId}/subcontratos/${subId}`));
 }
 
-// === Licitantes ===
+// === Catálogo global de licitantes ===
+// Vive en /legacy/estimaciones/licitantes/{licCatalogId}. Una entrada aquí
+// representa una empresa/contratista que puede licitar en N subcontratos.
+// Cuando se agrega un licitante a un subcontrato, copiamos el snapshot de
+// datos al subcontrato y guardamos `licCatalogId` para mantener el vínculo
+// (útil para tracking cross-subcontrato y para actualizar contactos).
+
+export async function listLicitantesCatalogo() {
+  return (await rread('licitantes')) || {};
+}
+export async function addLicitanteCatalogo(data) {
+  const r = push(_ref('licitantes'));
+  await set(r, {
+    nombre: (data.nombre || '').trim(),
+    contacto: (data.contacto || '').trim(),
+    email: (data.email || '').trim(),
+    telefono: (data.telefono || '').trim(),
+    notas: (data.notas || '').trim(),
+    archivado: false,
+    createdAt: Date.now(),
+    updatedAt: Date.now()
+  });
+  return r.key;
+}
+export async function updateLicitanteCatalogo(licCatalogId, patch) {
+  await update(_ref(`licitantes/${licCatalogId}`), { ...patch, updatedAt: Date.now() });
+}
+export async function archiveLicitanteCatalogo(licCatalogId, archivado = true) {
+  await update(_ref(`licitantes/${licCatalogId}`), { archivado, updatedAt: Date.now() });
+}
+export async function deleteLicitanteCatalogo(licCatalogId) {
+  await remove(_ref(`licitantes/${licCatalogId}`));
+}
+
+// === Licitantes (dentro de un subcontrato) ===
 export async function addLicitante(obraId, subId, data) {
   const r = push(_ref(`obras/${obraId}/subcontratos/${subId}/licitantes`));
   await set(r, {
@@ -483,6 +554,7 @@ export async function addLicitante(obraId, subId, data) {
     precios: data.precios || {},
     notas: data.notas || '',
     archivado: false,
+    licCatalogId: data.licCatalogId || null,   // vínculo opcional al catálogo global
     fechaCotizacion: data.fechaCotizacion || Date.now()
   });
   return r.key;

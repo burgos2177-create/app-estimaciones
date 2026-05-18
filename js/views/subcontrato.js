@@ -8,6 +8,7 @@ import { renderShell } from './shell.js';
 import {
   rread, loadObra, buildConceptosLookup, updateSubcontratoMeta, setSubcontratoConceptos,
   addLicitante, updateLicitante, setLicitantePrecios, deleteLicitante,
+  listLicitantesCatalogo, addLicitanteCatalogo,
   adjudicarSubcontrato, desadjudicarSubcontrato,
   createSubEstimacion, setSubEstimacionAvance, cerrarSubEstimacion, reabrirSubEstimacion,
   setPagoSub, deleteSubEstimacion
@@ -43,16 +44,44 @@ export async function renderSubcontrato({ params }) {
   const conceptosSub = sub.conceptos || [];
   const licitantes = sub.licitantes || {};
 
+  // Si el subcontrato vive en app-compras (escritor autoritativo), aquí solo
+  // se ve y se generan estimaciones parciales. Toda la edición de alcance /
+  // licitantes / adjudicación se hace allá.
+  const desdeCompras = meta._source === 'compras';
+  const readonly = desdeCompras;
+
   const tab = params.tab || TAB_ALCANCE;
 
   // ===== Header =====
   const head = h('div', { class: 'row' }, [
     h('h1', { style: { margin: 0 } }, meta.nombre || 'Subcontrato'),
     estadoTag(meta.estado),
+    desdeCompras && h('span', { class: 'tag', title: 'Subcontrato gestionado desde app de compras' }, '🔗 Compras'),
     h('div', { style: { flex: 1 } }),
-    h('button', { class: 'btn sm ghost', onClick: () => editMetaDialog(obraId, subId, meta) }, '✎ Editar'),
+    !readonly && h('button', { class: 'btn sm ghost', onClick: () => editMetaDialog(obraId, subId, meta) }, '✎ Editar'),
     h('button', { class: 'btn sm ghost', onClick: () => navigate(`/obras/${obraId}/subcontratos`) }, '← Volver')
   ]);
+
+  const bannerCompras = desdeCompras
+    ? h('div', {
+      style: {
+        padding: '10px 14px', marginBottom: '12px',
+        background: 'rgba(106, 169, 255, 0.07)',
+        border: '1px solid rgba(106, 169, 255, 0.3)',
+        borderRadius: '6px', fontSize: '12px',
+        display: 'flex', alignItems: 'center', gap: '10px'
+      }
+    }, [
+      h('span', { style: { fontSize: '16px' } }, '🔗'),
+      h('span', { style: { flex: 1 } }, [
+        'Este subcontrato se gestiona desde la ',
+        h('b', {}, 'app de compras'),
+        '. Aquí solo se ve el alcance/licitantes/adjudicación y se generan las ',
+        h('b', {}, 'estimaciones parciales'),
+        ' que viajan al buzón contable.'
+      ])
+    ])
+    : null;
 
   const adjudicado = !!meta.licitanteAdjudicadoId;
   const numSubEsts = Object.keys(sub.estimaciones || {}).length;
@@ -71,18 +100,18 @@ export async function renderSubcontrato({ params }) {
 
   let body;
   if (tab === TAB_ALCANCE) {
-    body = renderAlcance(obraId, subId, conceptosAll, conceptosSub);
+    body = renderAlcance(obraId, subId, conceptosAll, conceptosSub, readonly);
   } else if (tab === TAB_LICITANTES) {
-    body = renderLicitantes(obraId, subId, sub, conceptosAll, conceptosSub, licitantes, obra);
+    body = renderLicitantes(obraId, subId, sub, conceptosAll, conceptosSub, licitantes, obra, readonly);
   } else if (tab === TAB_ADJUDICACION) {
-    body = renderAdjudicacion(obraId, subId, sub, conceptosAll, conceptosSub, licitantes, obra);
+    body = renderAdjudicacion(obraId, subId, sub, conceptosAll, conceptosSub, licitantes, obra, readonly);
   } else if (tab === TAB_ESTIMACIONES) {
     body = renderSubEstimaciones(obraId, subId, sub, conceptosAll, conceptosSub, obra);
   } else {
-    body = renderAlcance(obraId, subId, conceptosAll, conceptosSub);
+    body = renderAlcance(obraId, subId, conceptosAll, conceptosSub, readonly);
   }
 
-  renderShell(crumbs(obraId, m.nombre, subId, meta.nombre), h('div', {}, [head, tabsBar, body]));
+  renderShell(crumbs(obraId, m.nombre, subId, meta.nombre), h('div', {}, [head, bannerCompras, tabsBar, body]));
 }
 
 function tabBtn(label, value, current, onClick) {
@@ -117,7 +146,7 @@ function estadoTag(estado) {
 //                            TAB ALCANCE
 // =====================================================================
 
-function renderAlcance(obraId, subId, conceptosAll, conceptosSub) {
+function renderAlcance(obraId, subId, conceptosAll, conceptosSub, readonly = false) {
   const total = conceptosSub.reduce((s, c) => {
     const cat = conceptosAll[c.conceptoId];
     return s + (Number(c.cantidadSub) || 0) * (cat?.precio_unitario || 0);
@@ -126,7 +155,7 @@ function renderAlcance(obraId, subId, conceptosAll, conceptosSub) {
   const head = h('div', { class: 'row' }, [
     h('h2', { style: { margin: 0 } }, 'Alcance del subcontrato'),
     h('div', { style: { flex: 1 } }),
-    h('button', { class: 'btn primary', onClick: () => addConceptosDialog(obraId, subId, conceptosAll, conceptosSub) }, '+ Agregar conceptos del catálogo')
+    !readonly && h('button', { class: 'btn primary', onClick: () => addConceptosDialog(obraId, subId, conceptosAll, conceptosSub) }, '+ Agregar conceptos del catálogo')
   ]);
 
   const table = conceptosSub.length === 0
@@ -151,14 +180,16 @@ function renderAlcance(obraId, subId, conceptosAll, conceptosSub) {
         if (!cat) {
           return h('tr', {}, [
             h('td', { colSpan: 7, class: 'muted' }, [h('span', {}, '⚠ Concepto eliminado del catálogo')]),
-            h('td', {}, h('button', { class: 'btn sm danger ghost', onClick: () => removeConcepto(obraId, subId, conceptosSub, idx) }, '✕'))
+            h('td', {}, !readonly && h('button', { class: 'btn sm danger ghost', onClick: () => removeConcepto(obraId, subId, conceptosSub, idx) }, '✕'))
           ]);
         }
         const cantIn = h('input', {
           type: 'number', step: 'any', value: c.cantidadSub ?? cat.cantidad ?? 0,
-          style: { width: '110px', textAlign: 'right' }
+          style: { width: '110px', textAlign: 'right' },
+          disabled: readonly
         });
         cantIn.addEventListener('change', async () => {
+          if (readonly) return;
           const newC = [...conceptosSub];
           newC[idx] = { ...c, cantidadSub: Number(cantIn.value) || 0 };
           await setSubcontratoConceptos(obraId, subId, newC);
@@ -173,7 +204,7 @@ function renderAlcance(obraId, subId, conceptosAll, conceptosSub) {
           h('td', { class: 'num muted' }, num(cat.cantidad, 2)),
           h('td', { class: 'num muted' }, money(cat.precio_unitario)),
           h('td', { class: 'num' }, money(importe)),
-          h('td', {}, h('button', { class: 'btn sm danger ghost', onClick: () => removeConcepto(obraId, subId, conceptosSub, idx) }, '✕'))
+          h('td', {}, !readonly && h('button', { class: 'btn sm danger ghost', onClick: () => removeConcepto(obraId, subId, conceptosSub, idx) }, '✕'))
         ]);
       }))
     ]);
@@ -343,12 +374,13 @@ async function removeConcepto(obraId, subId, current, idx) {
 //                          TAB LICITANTES
 // =====================================================================
 
-function renderLicitantes(obraId, subId, sub, conceptosAll, conceptosSub, licitantes, obra) {
+function renderLicitantes(obraId, subId, sub, conceptosAll, conceptosSub, licitantes, obra, readonly = false) {
   const licsArr = Object.entries(licitantes)
     .filter(([_, l]) => !l.archivado)
     .map(([id, l]) => ({ id, ...l }));
 
-  // Header con acciones
+  // Header con acciones. Las exports siempre disponibles (lectura), las de
+  // edición solo si no readonly.
   const head = h('div', { class: 'row' }, [
     h('h2', { style: { margin: 0 } }, 'Licitantes y comparativa'),
     h('div', { style: { flex: 1 } }),
@@ -356,8 +388,8 @@ function renderLicitantes(obraId, subId, sub, conceptosAll, conceptosSub, licita
     h('button', { class: 'btn ghost sm', onClick: () => exportLicitanteXlsx(obra, sub, conceptosAll) }, '📊 XLSX template'),
     licsArr.length > 0 && h('button', { class: 'btn ghost sm', onClick: () => exportComparativaXlsx(obra, sub, conceptosAll) }, '⬇ Comparativa XLSX'),
     licsArr.length > 0 && h('button', { class: 'btn ghost sm', onClick: () => exportComparativaPdf(obra, sub, conceptosAll) }, '⬇ Comparativa PDF'),
-    h('button', { class: 'btn ghost sm', onClick: () => importLicitanteFlow(obraId, subId, sub) }, '📥 Importar XLSX'),
-    h('button', { class: 'btn primary sm', onClick: () => addLicitanteDialog(obraId, subId) }, '+ Licitante manual')
+    !readonly && h('button', { class: 'btn ghost sm', onClick: () => importLicitanteFlow(obraId, subId, sub) }, '📥 Importar XLSX'),
+    !readonly && h('button', { class: 'btn primary sm', onClick: () => addLicitanteDialog(obraId, subId) }, '+ Licitante manual')
   ]);
 
   if (conceptosSub.length === 0) {
@@ -488,30 +520,159 @@ function renderLicitantes(obraId, subId, sub, conceptosAll, conceptosSub, licita
 }
 
 async function addLicitanteDialog(obraId, subId) {
-  const nombre = h('input', { placeholder: 'Nombre o razón social', autofocus: true });
+  // Modal con dos modos:
+  //  1) Picker — buscar y elegir uno del catálogo global, click "Agregar".
+  //  2) Crear nuevo — formulario; el licitante se guarda al catálogo global
+  //     Y se agrega al subcontrato actual.
+  let modo = 'picker';   // 'picker' | 'crear'
+  let licCatalogo = {};
+
+  try {
+    licCatalogo = await listLicitantesCatalogo();
+  } catch (e) {
+    console.error('No se pudo cargar el catálogo de licitantes', e);
+    licCatalogo = {};
+  }
+
+  // === Modo picker ===
+  const search = h('input', { placeholder: 'Buscar por nombre, contacto, email…', autofocus: true });
+  const resultsBox = h('div', {
+    style: {
+      maxHeight: '300px', overflow: 'auto',
+      border: '1px solid var(--border)', borderRadius: '6px',
+      background: 'var(--bg-2)', padding: '4px'
+    }
+  });
+
+  // Excluir los que ya están en este subcontrato para evitar duplicar
+  const subActual = state.obras?.[obraId]?.subcontratos?.[subId];
+  const yaEnSub = new Set(
+    Object.values(subActual?.licitantes || {})
+      .map(l => l.licCatalogId)
+      .filter(Boolean)
+  );
+
+  function rebuildResults() {
+    resultsBox.innerHTML = '';
+    const q = search.value.trim().toLowerCase();
+    const entries = Object.entries(licCatalogo)
+      .filter(([, l]) => !l.archivado)
+      .filter(([, l]) => !q || `${l.nombre} ${l.contacto || ''} ${l.email || ''}`.toLowerCase().includes(q))
+      .sort((a, b) => String(a[1].nombre || '').localeCompare(String(b[1].nombre || ''), 'es'));
+    if (entries.length === 0) {
+      resultsBox.appendChild(h('div', { class: 'muted', style: { padding: '12px', fontSize: '12px', textAlign: 'center' } },
+        Object.keys(licCatalogo).length === 0
+          ? 'No hay licitantes en el catálogo todavía. Crea el primero abajo.'
+          : 'Sin coincidencias. Ajusta la búsqueda o crea uno nuevo.'));
+      return;
+    }
+    for (const [cid, l] of entries) {
+      const alreadyAdded = yaEnSub.has(cid);
+      resultsBox.appendChild(h('div', {
+        style: { padding: '8px 10px', display: 'flex', alignItems: 'center', gap: '10px',
+                 borderBottom: '1px solid var(--border)', opacity: alreadyAdded ? '.5' : '1' }
+      }, [
+        h('div', { style: { flex: 1, minWidth: 0 } }, [
+          h('div', { style: { fontWeight: 500 } }, l.nombre || '(sin nombre)'),
+          h('div', { class: 'muted', style: { fontSize: '11px' } },
+            [l.contacto, l.email, l.telefono].filter(Boolean).join(' · ') || '—')
+        ]),
+        alreadyAdded
+          ? h('span', { class: 'tag muted', style: { fontSize: '10px' } }, 'ya en este subcontrato')
+          : h('button', {
+              class: 'btn sm primary',
+              onClick: async (e) => {
+                e.stopPropagation();
+                try {
+                  await addLicitante(obraId, subId, {
+                    nombre: l.nombre, contacto: l.contacto || '',
+                    email: l.email || '', telefono: l.telefono || '',
+                    licCatalogId: cid
+                  });
+                  toast(`Licitante "${l.nombre}" agregado`, 'ok');
+                  // Cerrar el modal manualmente y refrescar
+                  document.getElementById('modal-root').querySelectorAll('.modal-backdrop').forEach(b => b.remove());
+                  dispatch();
+                } catch (err) { toast('Error: ' + err.message, 'danger'); }
+              }
+            }, '+ Agregar')
+      ]));
+    }
+  }
+  search.addEventListener('input', rebuildResults);
+
+  // === Modo crear ===
+  const nombre = h('input', { placeholder: 'Nombre o razón social' });
   const contacto = h('input', { placeholder: 'Persona de contacto' });
   const email = h('input', { type: 'email', placeholder: 'correo@empresa.com' });
   const telefono = h('input', { placeholder: 'Teléfono' });
-  await modal({
-    title: 'Nuevo licitante',
-    body: h('div', {}, [
-      h('div', { class: 'field' }, [h('label', {}, 'Nombre'), nombre]),
-      h('div', { class: 'grid-2', style: { marginTop: '10px' } }, [
-        h('div', { class: 'field' }, [h('label', {}, 'Contacto'), contacto]),
-        h('div', { class: 'field' }, [h('label', {}, 'Teléfono'), telefono])
-      ]),
-      h('div', { class: 'field', style: { marginTop: '10px' } }, [h('label', {}, 'Email'), email]),
-      h('div', { class: 'muted', style: { marginTop: '10px', fontSize: '12px' } }, 'Después podrás capturar sus precios cotizando concepto por concepto, o importando un XLSX que él/ella te haya devuelto.')
+  const notas = h('input', { placeholder: 'Notas (opcional)' });
+  const formBody = h('div', {}, [
+    h('div', { class: 'field' }, [h('label', {}, 'Nombre *'), nombre]),
+    h('div', { class: 'grid-2', style: { marginTop: '10px' } }, [
+      h('div', { class: 'field' }, [h('label', {}, 'Contacto'), contacto]),
+      h('div', { class: 'field' }, [h('label', {}, 'Teléfono'), telefono])
     ]),
-    confirmLabel: 'Crear',
+    h('div', { class: 'field', style: { marginTop: '10px' } }, [h('label', {}, 'Email'), email]),
+    h('div', { class: 'field', style: { marginTop: '10px' } }, [h('label', {}, 'Notas'), notas]),
+    h('div', { class: 'muted', style: { marginTop: '10px', fontSize: '12px' } },
+      'Se guardará en el catálogo global de licitantes y se agregará a este subcontrato. La próxima vez aparecerá en el picker.')
+  ]);
+
+  // === Switcher entre modos ===
+  const pickerView = h('div', {}, [
+    h('div', { class: 'field' }, [
+      h('label', {}, 'Buscar en el catálogo'),
+      search
+    ]),
+    resultsBox,
+    h('div', { class: 'row', style: { marginTop: '12px' } }, [
+      h('button', {
+        class: 'btn',
+        onClick: () => { modo = 'crear'; renderBody(); }
+      }, '+ Crear nuevo licitante')
+    ])
+  ]);
+
+  const crearView = h('div', {}, [
+    h('div', { class: 'row', style: { marginBottom: '10px' } }, [
+      h('button', {
+        class: 'btn ghost sm',
+        onClick: () => { modo = 'picker'; renderBody(); }
+      }, '← Volver al catálogo')
+    ]),
+    formBody
+  ]);
+
+  const bodyContainer = h('div', {});
+  function renderBody() {
+    bodyContainer.innerHTML = '';
+    bodyContainer.appendChild(modo === 'crear' ? crearView : pickerView);
+    if (modo === 'picker') { rebuildResults(); search.focus(); }
+    else { nombre.focus(); }
+  }
+  renderBody();
+
+  await modal({
+    title: 'Agregar licitante',
+    body: bodyContainer,
+    size: 'lg',
+    confirmLabel: 'Crear y agregar',
+    cancelLabel: 'Cerrar',
     onConfirm: async () => {
+      if (modo !== 'crear') return true;   // En picker el agregar ya pasó vía botón inline
       if (!nombre.value.trim()) { toast('Nombre requerido', 'warn'); return false; }
       try {
+        const licCatalogId = await addLicitanteCatalogo({
+          nombre: nombre.value, contacto: contacto.value,
+          email: email.value, telefono: telefono.value, notas: notas.value
+        });
         await addLicitante(obraId, subId, {
           nombre: nombre.value.trim(),
-          contacto: contacto.value, email: email.value, telefono: telefono.value
+          contacto: contacto.value, email: email.value, telefono: telefono.value,
+          licCatalogId
         });
-        toast('Licitante agregado', 'ok');
+        toast('Licitante creado y agregado al subcontrato', 'ok');
         dispatch();
         return true;
       } catch (err) { toast('Error: ' + err.message, 'danger'); return false; }
@@ -683,7 +844,7 @@ async function editMetaDialog(obraId, subId, meta) {
 //                         TAB ADJUDICACIÓN
 // =====================================================================
 
-function renderAdjudicacion(obraId, subId, sub, conceptosAll, conceptosSub, licitantes, obra) {
+function renderAdjudicacion(obraId, subId, sub, conceptosAll, conceptosSub, licitantes, obra, readonly = false) {
   const meta = sub.meta || {};
   const adjudicadoId = meta.licitanteAdjudicadoId;
   const licsArr = Object.entries(licitantes).filter(([_, l]) => !l.archivado).map(([id, l]) => ({ id, ...l }));
@@ -726,7 +887,7 @@ function renderAdjudicacion(obraId, subId, sub, conceptosAll, conceptosSub, lici
           h('span', { class: 'muted', style: { fontSize: '12px' } }, 'Ya puedes capturar estimaciones de avance del subcontratista para pagarle.'),
           h('div', { style: { flex: 1 } }),
           h('button', { class: 'btn primary', onClick: () => setTab(obraId, subId, TAB_ESTIMACIONES) }, 'Ir a estimaciones del sub →'),
-          state.user.role === 'admin' && h('button', { class: 'btn ghost danger', onClick: () => desadjudicarConfirm(obraId, subId, ganador.nombre) }, 'Reabrir adjudicación')
+          !readonly && state.user.role === 'admin' && h('button', { class: 'btn ghost danger', onClick: () => desadjudicarConfirm(obraId, subId, ganador.nombre) }, 'Reabrir adjudicación')
         ])
       ])
     ]);
@@ -768,7 +929,7 @@ function renderAdjudicacion(obraId, subId, sub, conceptosAll, conceptosSub, lici
         h('div', { style: { textAlign: 'right' } }, [
           h('div', { class: 'mono', style: { fontSize: '20px', fontWeight: 600 } }, money(lic.total))
         ]),
-        h('button', {
+        !readonly && h('button', {
           class: 'btn primary',
           disabled: !lic.completo,
           style: { marginLeft: '14px' },
