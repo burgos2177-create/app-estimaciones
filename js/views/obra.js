@@ -7,6 +7,7 @@ import { navigate } from '../state/router.js';
 import { money, dateMx, num0, pct } from '../util/format.js';
 import { initDrive, isConfigured as driveConfigured, isSignedIn as driveSignedIn,
          signIn as driveSignIn, signOut as driveSignOut } from '../services/drive.js';
+import { exportCatalogoOpusXlsx } from '../services/export.js';
 
 export async function renderObra({ params }) {
   const obraId = params.id;
@@ -54,6 +55,14 @@ export async function renderObra({ params }) {
           h('div', {}, [h('b', {}, num0(numConceptos)), ' conceptos · ', h('span', { class: 'muted' }, obra.catalogo.sourceFileName || ''), ' · ', h('span', { class: 'muted' }, dateMx(obra.catalogo.importedAt))]),
           h('div', { style: { flex: 1 } }),
           h('button', { class: 'btn', onClick: () => navigate(`/obras/${obraId}/catalogo`) }, 'Ver catálogo'),
+          h('button', {
+            class: 'btn ghost',
+            title: 'Descarga el catálogo en formato OPUS (re-importable) para sembrar otra obra',
+            onClick: () => {
+              try { exportCatalogoOpusXlsx(obra); toast('Catálogo exportado en formato OPUS', 'ok'); }
+              catch (err) { toast('Error: ' + err.message, 'danger'); }
+            }
+          }, '⤓ Exportar catálogo'),
           importButton(obraId, true)
         ])
       ])

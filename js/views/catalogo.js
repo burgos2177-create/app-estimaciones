@@ -1,8 +1,9 @@
-import { h } from '../util/dom.js';
+import { h, toast } from '../util/dom.js';
 import { renderShell } from './shell.js';
 import { rread, loadObra } from '../services/db.js';
 import { money, num, num0 } from '../util/format.js';
 import { navigate } from '../state/router.js';
+import { exportCatalogoOpusXlsx } from '../services/export.js';
 
 export async function renderCatalogo({ params }) {
   const obraId = params.id;
@@ -97,7 +98,16 @@ export async function renderCatalogo({ params }) {
       h('div', { class: 'row' }, [
         h('div', {}, [h('span', { class: 'muted' }, 'Archivo: '), h('span', { class: 'mono' }, catalogo.sourceFileName)]),
         h('div', { style: { flex: 1 } }),
-        h('div', {}, [h('span', { class: 'muted' }, 'PUs: '), h('b', {}, num0(numPUs))])
+        h('div', {}, [h('span', { class: 'muted' }, 'PUs: '), h('b', {}, num0(numPUs))]),
+        h('button', {
+          class: 'btn ghost sm',
+          style: { marginLeft: '12px' },
+          title: 'Descarga el catálogo en formato OPUS (re-importable) para sembrar otra obra',
+          onClick: () => {
+            try { exportCatalogoOpusXlsx(obraFull); toast('Catálogo exportado en formato OPUS', 'ok'); }
+            catch (err) { toast('Error: ' + err.message, 'danger'); }
+          }
+        }, '⤓ Exportar OPUS')
       ]),
       h('div', { class: 'row', style: { marginTop: '8px', fontSize: '12px', flexWrap: 'wrap' } }, [
         h('div', {}, [h('span', { class: 'muted' }, 'Σ PUs del catálogo: '), h('b', { class: 'mono' }, money(sumaPUs))]),

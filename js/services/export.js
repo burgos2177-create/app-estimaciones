@@ -246,6 +246,49 @@ export function exportF1Pdf(obra) {
 }
 
 // ====================================================================
+//        EXPORT CATÁLOGO EN FORMATO OPUS (RE-IMPORTABLE)
+// ====================================================================
+// Reproduce el formato de entrada del parser (opus-parser.js): columnas
+//   Tipo | Clave | Descripción | Unidad | Cantidad | Precio unitario | Total
+// con agrupadores y precios unitarios en su orden original (campo `orden`),
+// excluyendo archivados. Sirve para sembrar otra obra: se exporta desde aquí y
+// se re-importa con "Importar OPUS" en la obra nueva, reconstruyendo la misma
+// jerarquía (el parser la deriva del orden de filas + los totales).
+export function exportCatalogoOpusXlsx(obra) {
+  const m = obra.meta || {};
+  const conceptos = Object.values(obra.catalogo?.conceptos || {})
+    .filter(c => !c.archivado)
+    .sort((a, b) => (a.orden || 0) - (b.orden || 0));
+
+  if (conceptos.length === 0) throw new Error('La obra no tiene catálogo para exportar.');
+
+  const header = ['Tipo', 'Clave', 'Descripción', 'Unidad', 'Cantidad', 'Precio unitario', 'Total'];
+  const aoa = [header];
+  for (const c of conceptos) {
+    aoa.push([
+      c.tipo === 'agrupador' ? 'Agrupador' : 'Precio unitario',
+      c.clave || '',
+      c.descripcion || '',
+      c.unidad || '',
+      c.cantidad || '',
+      c.precio_unitario || '',
+      c.total || ''
+    ]);
+  }
+
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  ws['!cols'] = [{ wch: 16 }, { wch: 14 }, { wch: 60 }, { wch: 8 }, { wch: 12 }, { wch: 14 }, { wch: 16 }];
+  for (let r = 1; r < aoa.length; r++) {
+    setNumFmt(ws, r, 4, '#,##0.00');     // cantidad
+    setNumFmt(ws, r, 5, '"$"#,##0.00');  // precio unitario
+    setNumFmt(ws, r, 6, '"$"#,##0.00');  // total
+  }
+  XLSX.utils.book_append_sheet(wb, ws, 'Catalogo OPUS');
+  XLSX.writeFile(wb, `Catalogo_${safeName(m.nombre)}.xlsx`);
+}
+
+// ====================================================================
 //                  RESUMEN (CARÁTULA DE ESTIMACIÓN)
 // ====================================================================
 
