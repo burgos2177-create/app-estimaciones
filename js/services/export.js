@@ -289,6 +289,58 @@ export function exportCatalogoOpusXlsx(obra) {
 }
 
 // ====================================================================
+//      EXPORT CATÁLOGO COMPATIBLE CON OPUS OLE ("De Excel a OPUS")
+// ====================================================================
+// A diferencia del export anterior (que sirve para RE-IMPORTAR en nuestras
+// apps vía opus-parser.js), este formato lo entiende la herramienta OLE
+// nativa de OPUS al transferir "De Excel a OPUS". OPUS NO interpreta nuestra
+// reconstrucción de jerarquía por presupuesto restante; necesita su propia
+// convención:
+//   • Columna Tipo: "A" = agrupador, "C" = concepto (no las palabras completas).
+//   • Columna Nivel: jerarquía explícita 1..N (raíz = 1). Sin esta columna OPUS
+//     aplana todo a agrupador nivel 1 / concepto nivel 2.
+//   • Agrupadores SIN Cantidad (la heurística de respaldo de OPUS toma como
+//     agrupador el renglón sin cantidad) y sin PU/Total (OPUS los recalcula).
+//   • Conceptos con Clave (requerida), Cantidad y Precio unitario; el Total lo
+//     calcula OPUS (Cantidad × PU), por eso se deja vacío.
+// El export anterior queda intacto; este es un botón aparte.
+export function exportCatalogoOpusOleXlsx(obra) {
+  const m = obra.meta || {};
+  const conceptos = Object.values(obra.catalogo?.conceptos || {})
+    .filter(c => !c.archivado)
+    .sort((a, b) => (a.orden || 0) - (b.orden || 0));
+
+  if (conceptos.length === 0) throw new Error('La obra no tiene catálogo para exportar.');
+
+  const header = ['Tipo', 'Nivel', 'Clave', 'Descripción', 'Unidad', 'Cantidad', 'Precio unitario', 'Total'];
+  const aoa = [header];
+  for (const c of conceptos) {
+    const esAgrupador = c.tipo === 'agrupador';
+    aoa.push([
+      esAgrupador ? 'A' : 'C',
+      (c.nivel || 0) + 1,                          // OPUS es 1-based (raíz = 1)
+      c.clave || '',
+      c.descripcion || '',
+      esAgrupador ? '' : (c.unidad || ''),
+      esAgrupador ? '' : (c.cantidad || ''),       // agrupador sin cantidad
+      esAgrupador ? '' : (c.precio_unitario || ''),
+      ''                                           // Total lo recalcula OPUS
+    ]);
+  }
+
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  ws['!cols'] = [{ wch: 6 }, { wch: 6 }, { wch: 14 }, { wch: 60 }, { wch: 8 }, { wch: 12 }, { wch: 14 }, { wch: 16 }];
+  for (let r = 1; r < aoa.length; r++) {
+    setNumFmt(ws, r, 5, '#,##0.00');     // cantidad
+    setNumFmt(ws, r, 6, '"$"#,##0.00');  // precio unitario
+    setNumFmt(ws, r, 7, '"$"#,##0.00');  // total
+  }
+  XLSX.utils.book_append_sheet(wb, ws, 'Catalogo OPUS');
+  XLSX.writeFile(wb, `Catalogo_OPUS-OLE_${safeName(m.nombre)}.xlsx`);
+}
+
+// ====================================================================
 //                  RESUMEN (CARÁTULA DE ESTIMACIÓN)
 // ====================================================================
 

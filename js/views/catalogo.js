@@ -3,7 +3,7 @@ import { renderShell } from './shell.js';
 import { rread, loadObra } from '../services/db.js';
 import { money, num, num0 } from '../util/format.js';
 import { navigate } from '../state/router.js';
-import { exportCatalogoOpusXlsx } from '../services/export.js';
+import { exportCatalogoOpusXlsx, exportCatalogoOpusOleXlsx } from '../services/export.js';
 
 export async function renderCatalogo({ params }) {
   const obraId = params.id;
@@ -102,12 +102,21 @@ export async function renderCatalogo({ params }) {
         h('button', {
           class: 'btn ghost sm',
           style: { marginLeft: '12px' },
-          title: 'Descarga el catálogo en formato OPUS (re-importable) para sembrar otra obra',
+          title: 'Descarga el catálogo en nuestro formato (re-importable en las apps SGR) para sembrar otra obra',
           onClick: () => {
-            try { exportCatalogoOpusXlsx(obraFull); toast('Catálogo exportado en formato OPUS', 'ok'); }
+            try { exportCatalogoOpusXlsx(obraFull); toast('Catálogo exportado en formato SGR', 'ok'); }
             catch (err) { toast('Error: ' + err.message, 'danger'); }
           }
-        }, '⤓ Exportar OPUS')
+        }, '⤓ Exportar (apps SGR)'),
+        h('button', {
+          class: 'btn ghost sm',
+          style: { marginLeft: '8px' },
+          title: 'Descarga el catálogo en el formato que espera OPUS al transferir "De Excel a OPUS" (columnas Tipo A/C + Nivel)',
+          onClick: () => {
+            try { exportCatalogoOpusOleXlsx(obraFull); toast('Catálogo exportado para OPUS OLE', 'ok'); }
+            catch (err) { toast('Error: ' + err.message, 'danger'); }
+          }
+        }, '⤓ Exportar (OPUS OLE)')
       ]),
       h('div', { class: 'row', style: { marginTop: '8px', fontSize: '12px', flexWrap: 'wrap' } }, [
         h('div', {}, [h('span', { class: 'muted' }, 'Σ PUs del catálogo: '), h('b', { class: 'mono' }, money(sumaPUs))]),
