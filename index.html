@@ -14,8 +14,13 @@
   <div id="modal-root"></div>
   <div id="toast-root"></div>
   <script type="module">
-    // Cache-bust dinámico en dev. El src con ?v=timestamp obliga al navegador
-    // a re-evaluar el grafo de módulos cada vez que cargas la página.
+    // Service worker network-first: garantiza que SIEMPRE cargues el código
+    // más reciente del servidor (no solo main.js, sino todo el grafo de
+    // módulos). updateViaCache:'none' evita que el propio sw.js se cachee.
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('./sw.js', { updateViaCache: 'none' }).catch(() => {});
+    }
+    // Cache-bust del punto de entrada (respaldo si el SW aún no está activo).
     const v = Date.now();
     import('./js/main.js?v=' + v);
   </script>
