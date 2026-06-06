@@ -314,12 +314,24 @@ export function exportCatalogoOpusOleXlsx(obra) {
 
   const header = ['Tipo', 'Nivel', 'Clave', 'Descripción', 'Unidad', 'Cantidad', 'Precio unitario', 'Total'];
   const aoa = [header];
+  // OPUS requiere clave en TODO renglón (también agrupadores) para crearlo.
+  // Los agrupadores de OPUS suelen venir sin clave, así que generamos una
+  // jerárquica (1, 1.1, 1.2, 2, …) por nivel cuando falte. Las claves reales
+  // existentes se respetan.
+  const agrCounters = [];
+  const claveAgrupador = (nivel1) => {
+    agrCounters[nivel1] = (agrCounters[nivel1] || 0) + 1;
+    agrCounters.length = nivel1 + 1;            // reinicia contadores más profundos
+    return agrCounters.slice(1, nivel1 + 1).join('.');
+  };
   for (const c of conceptos) {
     const esAgrupador = c.tipo === 'agrupador';
+    const nivel1 = (c.nivel || 0) + 1;          // OPUS es 1-based (raíz = 1)
+    const clave = esAgrupador ? (c.clave || claveAgrupador(nivel1)) : (c.clave || '');
     aoa.push([
       esAgrupador ? 'A' : 'C',
-      (c.nivel || 0) + 1,                          // OPUS es 1-based (raíz = 1)
-      c.clave || '',
+      nivel1,
+      clave,
       c.descripcion || '',
       esAgrupador ? '' : (c.unidad || ''),
       esAgrupador ? '' : (c.cantidad || ''),       // agrupador sin cantidad
