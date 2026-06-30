@@ -5,6 +5,7 @@ import { state } from '../state/store.js';
 import { navigate } from '../state/router.js';
 import { money, dateMx, num, num0, pct } from '../util/format.js';
 import { calcGeneradorTotal, PLANTILLAS } from '../services/plantillas.js';
+import { exportEstimacionPdf } from '../services/export.js';
 
 export async function renderEstimacion({ params }) {
   const obraId = params.id;
@@ -80,6 +81,18 @@ export async function renderEstimacion({ params }) {
       ? h('span', { class: 'tag ok' }, '🔒 Cerrada')
       : h('span', { class: 'tag warn' }, '✎ Borrador')),
     h('div', { style: { flex: 1 } }),
+    h('button', {
+      class: 'btn',
+      title: 'Generar documento ejecutivo de la estimación (PDF): avance, estado de cuenta y memoria de generadores',
+      onClick: async (e) => {
+        const btn = e.currentTarget;
+        const prev = btn.textContent;
+        btn.disabled = true; btn.textContent = '⏳ Generando…';
+        try { await exportEstimacionPdf(obra, estId); }
+        catch (err) { toast('Error: ' + err.message, 'danger'); }
+        finally { btn.disabled = false; btn.textContent = prev; }
+      }
+    }, '⤓ PDF estimación'),
     editable && h('button', { class: 'btn primary', onClick: () => pickConceptoDialog(obra, obraId, estId, conceptos) }, '+ Nuevo generador'),
     editable && h('button', { class: 'btn', onClick: () => pickConceptoSinGenDialog(obra, obraId, estId, conceptos, avances) }, '+ Avance sin generador')
   ]);

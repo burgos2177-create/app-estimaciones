@@ -5,7 +5,7 @@
 //  - F-1 / Concentrado de obra (todo el catálogo con todas las estimaciones)
 //  - RESUMEN de una estimación (carátula + estado de cuenta para entrega)
 
-import { calcGeneradorTotal } from './plantillas.js';
+import { calcGeneradorTotal, getColumns, calcPartidaTotal } from './plantillas.js';
 import { getImageObjectUrl, isSignedIn as driveSignedIn } from './drive.js';
 
 const fmtMxn = new Intl.NumberFormat('es-MX', { style: 'currency', currency: 'MXN', minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -434,6 +434,7 @@ const DEFAULT_PRINT_CFG = {
   soloMovimiento: true,        // en modo estimación, solo conceptos con avance en esta estim
   mostrarAmortizacion: true,   // bloque de anticipo
   mostrarEstadoCuenta: true,   // bloque financiero
+  incluirMemoria: false,       // memoria de generadores (detalle de medición)
   incluirAnexoFotos: false,    // anexar fotos/croquis al final
   notas: ''                     // texto libre al final del PDF
 };
@@ -783,6 +784,12 @@ export async function exportResumenPdf(obra, estId, cfg = {}) {
     doc.text(lines, 30, ny + 14);
   }
 
+  // Memoria de generadores (detalle de medición) — opcional
+  if (cfg.incluirMemoria) {
+    try { appendMemoriaGeneradores(doc, obra, estId, m); }
+    catch (err) { console.error('No se pudo anexar la memoria de generadores:', err); }
+  }
+
   // Anexo de croquis y fotos (opcional)
   if (cfg.incluirAnexoFotos) {
     try { await appendAnexoFotos(doc, obra, estId, m); }
@@ -791,6 +798,102 @@ export async function exportResumenPdf(obra, estId, cfg = {}) {
 
   const fname = (isEstadoCuenta ? 'EstadoCuenta' : 'RESUMEN') + '_' + safeName(m.nombre) + '_Est' + est.numero + '.pdf';
   doc.save(fname);
+}
+
+// PDF EJECUTIVO DE LA ESTIMACIÓN (un clic). Documento autocontenido para
+// entregar al cliente con todo el avance: encabezado de obra, resumen por
+// concepto (contratado / esta estimación / acumulado / restante), estado de
+// cuenta, memoria de generadores (cómo se midió cada volumen) y, si hay sesión
+// de Drive, anexo de croquis/fotos. Reusa exportResumenPdf con la config llena.
+export async function exportEstimacionPdf(obra, estId) {
+  return exportResumenPdf(obra, estId, {
+    modo: 'estimacion',
+    soloMovimiento: true,
+    mostrarEstadoCuenta: true,
+    mostrarAmortizacion: true,
+    incluirMemoria: true,
+    incluirAnexoFotos: true
+  });
+}
+
+// Memoria de generadores: por cada generador de la estimación, su detalle de
+// medición (partidas según la plantilla del concepto) + ajustes + total
+// ejecutado. Es la "certidumbre" de cómo se derivó cada cantidad cobrada.
+function appendMemoriaGeneradores(doc, obra, estId, m) {
+  const conceptos = obra.catalogo?.conceptos || {};
+  const keyMap = obra.catalogo?.migrationKeyMap;
+  const gens = Object.values(obra.generadores || {})
+    .filter(g => g.estimacionId === estId)
+    .sort((a, b) => (a.numero || 0) - (b.numero || 0));
+  if (!gens.length) return;
+
+  const W = doc.internal.pageSize.width;
+  doc.addPage();
+  drawObraHeader(doc, m, 'MEMORIA DE GENERADORES');
+  let y = 168;
+
+  for (const gen of gens) {
+    const k = resolveKey(conceptos, keyMap, gen.conceptoId);
+    const c = k ? conceptos[k] : null;
+    const cols = c ? getColumns(c) : null;
+    const total = c ? calcGeneradorTotal(c, gen) : 0;
+    const pu = c?.precio_unitario || 0;
+
+    if (y > 660) { doc.addPage(); drawObraHeader(doc, m, 'MEMORIA DE GENERADORES'); y = 168; }
+
+    // Encabezado del generador
+    doc.setFillColor(245, 248, 252); doc.rect(30, y, W - 60, 30, 'F');
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(9); doc.setTextColor(30);
+    doc.text(`Generador #${gen.numero}  ·  ${c?.clave || '?'}`, 36, y + 12);
+    doc.setFont('helvetica', 'normal'); doc.setFontSize(7.5); doc.setTextColor(70);
+    const desc = doc.splitTextToSize(c?.descripcion || '(concepto eliminado)', W - 220);
+    doc.text(desc[0] + (desc.length > 1 ? '…' : ''), 36, y + 23);
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(8); doc.setTextColor(30);
+    doc.text(`Total: ${num2(total)} ${c?.unidad || ''}`, W - 36, y + 12, { align: 'right' });
+    doc.setFont('helvetica', 'normal'); doc.setTextColor(90); doc.setFontSize(7.5);
+    doc.text(`Importe: ${money(total * pu)}`, W - 36, y + 23, { align: 'right' });
+    y += 36;
+
+    if (cols && cols.length && (gen.partidas || []).length) {
+      const head = [[...cols.map(col => col.label), 'Parcial']];
+      const body = (gen.partidas || []).map(p => [
+        ...cols.map(col => (p[col.key] != null && p[col.key] !== '')
+          ? (col.type === 'number' ? num2(p[col.key]) : String(p[col.key]))
+          : ''),
+        num2(calcPartidaTotal(c, p))
+      ]);
+      const foot = [];
+      for (const a of (gen.ajustes || [])) {
+        foot.push([{ content: `Ajuste: ${a.etiqueta || ''}`, colSpan: cols.length, styles: { halign: 'right', fontStyle: 'italic' } }, num2(a.cantidad)]);
+      }
+      foot.push([{ content: 'TOTAL EJECUTADO', colSpan: cols.length, styles: { halign: 'right', fontStyle: 'bold' } }, { content: num2(total), styles: { fontStyle: 'bold' } }]);
+
+      const colStyles = cols.reduce((acc, col, i) => { if (col.type === 'number') acc[i] = { halign: 'right' }; return acc; }, {});
+      colStyles[cols.length] = { halign: 'right', fontStyle: 'bold' };
+
+      doc.autoTable({
+        startY: y,
+        head, body, foot,
+        styles: { font: 'helvetica', fontSize: 7, cellPadding: 2.5, lineColor: [210, 218, 228], lineWidth: 0.3 },
+        headStyles: { fillColor: [60, 72, 90], textColor: 230, fontStyle: 'bold' },
+        footStyles: { fillColor: [244, 247, 250], textColor: 30 },
+        columnStyles: colStyles,
+        margin: { left: 30, right: 30, bottom: 60 },
+        didDrawPage: (data) => drawFooter(doc, data, m)
+      });
+      y = doc.lastAutoTable.finalY + 16;
+    } else {
+      doc.setFontSize(7.5); doc.setTextColor(120);
+      doc.text('Captura directa (sin memoria de cálculo).', 36, y + 2);
+      y += 18;
+    }
+
+    if (gen.notas && gen.notas.trim()) {
+      doc.setFontSize(7); doc.setTextColor(110);
+      const ln = doc.splitTextToSize('Notas: ' + gen.notas, W - 72);
+      doc.text(ln, 36, y); y += ln.length * 9 + 10;
+    }
+  }
 }
 
 // ====================================================================
