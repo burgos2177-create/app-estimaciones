@@ -2,7 +2,7 @@ import { h, toast, modal } from '../util/dom.js';
 import { renderShell } from './shell.js';
 import { state, setState } from '../state/store.js';
 import { rread, loadObra, updateObraMeta, reconcileCatalogo, setObraIntegracion } from '../services/db.js';
-import { buildIntegracionForm } from './_integracion-form.js';
+import { buildIntegracionForm } from './integracion-form.js';
 import { parseOpusXLS } from '../services/opus-parser.js';
 import { navigate } from '../state/router.js';
 import { money, dateMx, num0, pct } from '../util/format.js';

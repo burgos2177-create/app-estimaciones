@@ -5,7 +5,7 @@ import { listObrasForUser, createObra } from '../services/db.js';
 import { navigate } from '../state/router.js';
 import { money, dateMx, pct } from '../util/format.js';
 import { modal, toast } from '../util/dom.js';
-import { buildIntegracionForm } from './_integracion-form.js';
+import { buildIntegracionForm } from './integracion-form.js';
 
 export async function renderObrasList() {
   renderShell([{ label: 'Obras' }], h('div', {}, [h('div', { class: 'empty' }, 'Cargando obras…')]));
