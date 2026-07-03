@@ -112,16 +112,22 @@ function crumbs(obraId, nombre) {
 async function newSubcontratoDialog(obraId) {
   const nombre = h('input', { placeholder: 'p.ej. Acero estructural', autofocus: true });
   const descripcion = h('textarea', { rows: 2, placeholder: 'Descripción / alcance general (opcional)', style: { width: '100%', resize: 'vertical' } });
+  const tipo = h('select', {}, [
+    h('option', { value: 'subcontrato' }, 'Subcontrato (precio unitario completo)'),
+    h('option', { value: 'destajo' }, 'Destajo (solo mano de obra)')
+  ]);
   await modal({
     title: 'Nuevo subcontrato',
     body: h('div', {}, [
       h('div', { class: 'field' }, [h('label', {}, 'Nombre'), nombre]),
+      h('div', { class: 'field', style: { marginTop: '10px' } }, [h('label', {}, 'Tipo'), tipo]),
+      h('p', { class: 'muted', style: { fontSize: '11px', margin: '4px 0 0' } }, 'En un destajo la comparativa se hace contra la mano de obra de referencia (que capturas por concepto), no contra el precio unitario completo.'),
       h('div', { class: 'field', style: { marginTop: '10px' } }, [h('label', {}, 'Descripción'), descripcion])
     ]),
     confirmLabel: 'Crear',
     onConfirm: async () => {
       try {
-        const id = await createSubcontrato(obraId, { nombre: nombre.value.trim() || 'Sin nombre', descripcion: descripcion.value });
+        const id = await createSubcontrato(obraId, { nombre: nombre.value.trim() || 'Sin nombre', descripcion: descripcion.value, tipo: tipo.value });
         toast('Subcontrato creado', 'ok');
         navigate(`/obras/${obraId}/subcontratos/${id}`);
         return true;

@@ -56,6 +56,9 @@ export async function renderSubcontrato({ params }) {
   const head = h('div', { class: 'row' }, [
     h('h1', { style: { margin: 0 } }, meta.nombre || 'Subcontrato'),
     estadoTag(meta.estado),
+    meta.tipo === 'destajo'
+      ? h('span', { class: 'tag warn', title: 'Destajo: solo mano de obra. La comparativa es contra la M.O. de referencia.' }, '👷 Destajo')
+      : h('span', { class: 'tag muted', title: 'Subcontrato a precio unitario completo' }, 'Subcontrato'),
     desdeCompras && h('span', { class: 'tag', title: 'Subcontrato gestionado desde app de compras' }, '🔗 Compras'),
     h('div', { style: { flex: 1 } }),
     !readonly && h('button', { class: 'btn sm ghost', onClick: () => editMetaDialog(obraId, subId, meta) }, '✎ Editar'),
@@ -99,8 +102,9 @@ export async function renderSubcontrato({ params }) {
   ]);
 
   let body;
+  const esDestajo = meta.tipo === 'destajo';
   if (tab === TAB_ALCANCE) {
-    body = renderAlcance(obraId, subId, conceptosAll, conceptosSub, readonly);
+    body = renderAlcance(obraId, subId, conceptosAll, conceptosSub, readonly, esDestajo);
   } else if (tab === TAB_LICITANTES) {
     body = renderLicitantes(obraId, subId, sub, conceptosAll, conceptosSub, licitantes, obra, readonly);
   } else if (tab === TAB_ADJUDICACION) {
@@ -108,7 +112,7 @@ export async function renderSubcontrato({ params }) {
   } else if (tab === TAB_ESTIMACIONES) {
     body = renderSubEstimaciones(obraId, subId, sub, conceptosAll, conceptosSub, obra);
   } else {
-    body = renderAlcance(obraId, subId, conceptosAll, conceptosSub, readonly);
+    body = renderAlcance(obraId, subId, conceptosAll, conceptosSub, readonly, esDestajo);
   }
 
   renderShell(crumbs(obraId, m.nombre, subId, meta.nombre), h('div', {}, [head, bannerCompras, tabsBar, body]));
@@ -142,14 +146,21 @@ function estadoTag(estado) {
   return h('span', { class: 'tag muted' }, e);
 }
 
+// Precio unitario de REFERENCIA para comparar ofertas.
+//  · subcontrato → precio unitario completo del catálogo
+//  · destajo     → solo la mano de obra de referencia (capturada por concepto)
+function refUnit(esDestajo, cs, cat) {
+  return esDestajo ? (Number(cs?.manoObraUnitario) || 0) : (Number(cat?.precio_unitario) || 0);
+}
+
 // =====================================================================
 //                            TAB ALCANCE
 // =====================================================================
 
-function renderAlcance(obraId, subId, conceptosAll, conceptosSub, readonly = false) {
+function renderAlcance(obraId, subId, conceptosAll, conceptosSub, readonly = false, esDestajo = false) {
   const total = conceptosSub.reduce((s, c) => {
     const cat = conceptosAll[c.conceptoId];
-    return s + (Number(c.cantidadSub) || 0) * (cat?.precio_unitario || 0);
+    return s + (Number(c.cantidadSub) || 0) * refUnit(esDestajo, c, cat);
   }, 0);
 
   const head = h('div', { class: 'row' }, [
@@ -172,6 +183,7 @@ function renderAlcance(obraId, subId, conceptosAll, conceptosSub, readonly = fal
         h('th', { class: 'num' }, 'Cantidad sub'),
         h('th', { class: 'num' }, 'Cant. catálogo'),
         h('th', { class: 'num' }, 'P.U. catálogo'),
+        esDestajo && h('th', { class: 'num', title: 'Mano de obra de referencia por unidad. Contra esto se compara al destajista.' }, 'M.O. ref. ($/u)'),
         h('th', { class: 'num' }, 'Importe ref.'),
         h('th', {}, '')
       ])]),
@@ -179,7 +191,7 @@ function renderAlcance(obraId, subId, conceptosAll, conceptosSub, readonly = fal
         const cat = conceptosAll[c.conceptoId];
         if (!cat) {
           return h('tr', {}, [
-            h('td', { colSpan: 7, class: 'muted' }, [h('span', {}, '⚠ Concepto eliminado del catálogo')]),
+            h('td', { colSpan: esDestajo ? 8 : 7, class: 'muted' }, [h('span', {}, '⚠ Concepto eliminado del catálogo')]),
             h('td', {}, !readonly && h('button', { class: 'btn sm danger ghost', onClick: () => removeConcepto(obraId, subId, conceptosSub, idx) }, '✕'))
           ]);
         }
@@ -195,7 +207,23 @@ function renderAlcance(obraId, subId, conceptosAll, conceptosSub, readonly = fal
           await setSubcontratoConceptos(obraId, subId, newC);
           dispatch();
         });
-        const importe = (Number(c.cantidadSub) || 0) * (cat.precio_unitario || 0);
+        // Input de mano de obra de referencia (solo destajo)
+        let moCell = null;
+        if (esDestajo) {
+          const moIn = h('input', {
+            type: 'number', step: 'any', value: c.manoObraUnitario ?? '',
+            placeholder: '0.00', style: { width: '110px', textAlign: 'right' }, disabled: readonly
+          });
+          moIn.addEventListener('change', async () => {
+            if (readonly) return;
+            const newC = [...conceptosSub];
+            newC[idx] = { ...c, manoObraUnitario: Number(moIn.value) || 0 };
+            await setSubcontratoConceptos(obraId, subId, newC);
+            dispatch();
+          });
+          moCell = h('td', {}, moIn);
+        }
+        const importe = (Number(c.cantidadSub) || 0) * refUnit(esDestajo, c, cat);
         return h('tr', {}, [
           h('td', { class: 'mono muted' }, cat.clave || ''),
           h('td', {}, h('div', { class: 'desc' }, cat.descripcion || '')),
@@ -203,6 +231,7 @@ function renderAlcance(obraId, subId, conceptosAll, conceptosSub, readonly = fal
           h('td', {}, cantIn),
           h('td', { class: 'num muted' }, num(cat.cantidad, 2)),
           h('td', { class: 'num muted' }, money(cat.precio_unitario)),
+          moCell,
           h('td', { class: 'num' }, money(importe)),
           h('td', {}, !readonly && h('button', { class: 'btn sm danger ghost', onClick: () => removeConcepto(obraId, subId, conceptosSub, idx) }, '✕'))
         ]);
@@ -210,7 +239,7 @@ function renderAlcance(obraId, subId, conceptosAll, conceptosSub, readonly = fal
     ]);
 
   const totalCard = conceptosSub.length > 0 ? h('div', { class: 'card', style: { textAlign: 'right' } }, [
-    h('div', { class: 'muted' }, 'Importe de referencia (a precios del catálogo):'),
+    h('div', { class: 'muted' }, esDestajo ? 'Importe de referencia (mano de obra):' : 'Importe de referencia (a precios del catálogo):'),
     h('div', { class: 'mono', style: { fontSize: '24px', fontWeight: 700, color: 'var(--accent)' } }, money(total))
   ]) : null;
 
@@ -416,9 +445,10 @@ function renderLicitantes(obraId, subId, sub, conceptosAll, conceptosSub, licita
   }
 
   // Tabla cruzada: filas = conceptos, columnas = licitantes
+  const esDestajo = sub.meta?.tipo === 'destajo';
   const totalCatalogo = conceptosSub.reduce((s, cs) => {
     const cat = conceptosAll[cs.conceptoId];
-    return s + (Number(cs.cantidadSub) || 0) * (cat?.precio_unitario || 0);
+    return s + (Number(cs.cantidadSub) || 0) * refUnit(esDestajo, cs, cat);
   }, 0);
 
   // Totales por licitante
@@ -437,11 +467,11 @@ function renderLicitantes(obraId, subId, sub, conceptosAll, conceptosSub, licita
       h('th', { rowSpan: 2 }, 'Descripción'),
       h('th', { rowSpan: 2 }, 'U.'),
       h('th', { rowSpan: 2, class: 'num' }, 'Cant.'),
-      h('th', { colSpan: 2, class: 'num', style: { background: 'var(--bg-3)', textAlign: 'center' } }, 'CATÁLOGO'),
+      h('th', { colSpan: 2, class: 'num', style: { background: 'var(--bg-3)', textAlign: 'center' } }, esDestajo ? 'MANO DE OBRA (ref.)' : 'CATÁLOGO'),
       ...licsArr.map(lic => h('th', { colSpan: 3, class: 'num', style: { borderLeft: '2px solid var(--border-strong)', textAlign: 'center' } }, [
         h('div', {}, lic.nombre),
         h('div', { class: 'muted', style: { fontWeight: 400, fontSize: '10px' } }, [
-          h('button', { class: 'btn sm ghost', onClick: e => { e.stopPropagation(); editLicitanteDialog(obraId, subId, lic.id, lic, conceptosSub, conceptosAll); } }, '✎'),
+          h('button', { class: 'btn sm ghost', onClick: e => { e.stopPropagation(); editLicitanteDialog(obraId, subId, lic.id, lic, conceptosSub, conceptosAll, esDestajo); } }, '✎'),
           ' ',
           h('button', { class: 'btn sm ghost', onClick: e => { e.stopPropagation(); deleteLicConfirm(obraId, subId, lic.id, lic.nombre); } }, '✕')
         ])
@@ -463,7 +493,7 @@ function renderLicitantes(obraId, subId, sub, conceptosAll, conceptosSub, licita
     const cat = conceptosAll[cs.conceptoId];
     if (!cat) return null;
     const cant = Number(cs.cantidadSub) || 0;
-    const puCat = cat.precio_unitario || 0;
+    const puCat = refUnit(esDestajo, cs, cat);
     const importeCat = cant * puCat;
 
     // mejor PU para resaltar
@@ -680,7 +710,7 @@ async function addLicitanteDialog(obraId, subId) {
   });
 }
 
-async function editLicitanteDialog(obraId, subId, licId, lic, conceptosSub, conceptosAll) {
+async function editLicitanteDialog(obraId, subId, licId, lic, conceptosSub, conceptosAll, esDestajo = false) {
   const nombre = h('input', { value: lic.nombre || '' });
   const contacto = h('input', { value: lic.contacto || '' });
   const email = h('input', { type: 'email', value: lic.email || '' });
@@ -700,7 +730,7 @@ async function editLicitanteDialog(obraId, subId, licId, lic, conceptosSub, conc
       h('td', { style: { fontSize: '12px', lineHeight: '1.4', minWidth: '300px', maxWidth: '500px', verticalAlign: 'top' } }, cat.descripcion || ''),
       h('td', { class: 'muted', style: { whiteSpace: 'nowrap', verticalAlign: 'top' } }, cat.unidad),
       h('td', { class: 'num muted', style: { whiteSpace: 'nowrap', verticalAlign: 'top' } }, num(cs.cantidadSub, 2)),
-      h('td', { class: 'num muted', style: { fontSize: '11px', whiteSpace: 'nowrap', verticalAlign: 'top' } }, money(cat.precio_unitario)),
+      h('td', { class: 'num muted', style: { fontSize: '11px', whiteSpace: 'nowrap', verticalAlign: 'top' } }, money(refUnit(esDestajo, cs, cat))),
       h('td', { style: { verticalAlign: 'top' } }, inp)
     ]);
   }).filter(Boolean));
@@ -822,16 +852,22 @@ async function importLicitanteFlow(obraId, subId, sub) {
 async function editMetaDialog(obraId, subId, meta) {
   const nombre = h('input', { value: meta.nombre || '' });
   const descripcion = h('textarea', { rows: 2, value: meta.descripcion || '', style: { width: '100%', resize: 'vertical' } });
+  const tipo = h('select', {}, [
+    h('option', { value: 'subcontrato', selected: (meta.tipo || 'subcontrato') !== 'destajo' }, 'Subcontrato (precio unitario completo)'),
+    h('option', { value: 'destajo', selected: meta.tipo === 'destajo' }, 'Destajo (solo mano de obra)')
+  ]);
   await modal({
     title: 'Editar subcontrato',
     body: h('div', {}, [
       h('div', { class: 'field' }, [h('label', {}, 'Nombre'), nombre]),
+      h('div', { class: 'field', style: { marginTop: '10px' } }, [h('label', {}, 'Tipo'), tipo]),
+      h('p', { class: 'muted', style: { fontSize: '11px', margin: '4px 0 0' } }, 'Destajo: la comparativa compara al licitante contra la mano de obra de referencia (columna en Alcance), no contra el precio unitario completo.'),
       h('div', { class: 'field', style: { marginTop: '10px' } }, [h('label', {}, 'Descripción'), descripcion])
     ]),
     confirmLabel: 'Guardar',
     onConfirm: async () => {
       try {
-        await updateSubcontratoMeta(obraId, subId, { nombre: nombre.value.trim(), descripcion: descripcion.value });
+        await updateSubcontratoMeta(obraId, subId, { nombre: nombre.value.trim(), descripcion: descripcion.value, tipo: tipo.value });
         toast('Guardado', 'ok');
         dispatch();
         return true;

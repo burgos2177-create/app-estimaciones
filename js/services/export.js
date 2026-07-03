@@ -1310,17 +1310,21 @@ export function exportComparativaXlsx(obra, sub, conceptosAll) {
   const m = obra.meta || {};
   const meta = sub.meta || {};
   const conceptosSub = sub.conceptos || [];
+  const esDestajo = meta.tipo === 'destajo';
+  const refUnit = (cs, cat) => esDestajo ? (Number(cs?.manoObraUnitario) || 0) : (Number(cat?.precio_unitario) || 0);
+  const refLabel = esDestajo ? 'M.O. ref.' : 'P.U. catálogo';
+  const refImpLabel = esDestajo ? 'Importe M.O.' : 'Importe catálogo';
   const lics = Object.entries(sub.licitantes || {})
     .filter(([_, l]) => !l.archivado)
     .map(([id, l]) => ({ id, ...l }));
 
   const aoa = [
-    ['COMPARATIVA DE LICITANTES'],
+    ['COMPARATIVA DE LICITANTES' + (esDestajo ? ' (DESTAJO — MANO DE OBRA)' : '')],
     [],
     ['OBRA:', m.nombre || '', '', 'SUBCONTRATO:', meta.nombre || ''],
     ['CONTRATO:', m.contratoNo || '', '', 'FECHA:', dateStr(Date.now())],
     [],
-    ['Clave', 'Descripción', 'U.', 'Cant.', 'P.U. catálogo', 'Importe catálogo',
+    ['Clave', 'Descripción', 'U.', 'Cant.', refLabel, refImpLabel,
       ...lics.flatMap(l => [`${l.nombre} P.U.`, `${l.nombre} importe`, `${l.nombre} Ahorro %`])
     ]
   ];
@@ -1332,7 +1336,7 @@ export function exportComparativaXlsx(obra, sub, conceptosAll) {
     const cat = conceptosAll[cs.conceptoId];
     if (!cat) continue;
     const cant = Number(cs.cantidadSub) || 0;
-    const puCat = cat.precio_unitario || 0;
+    const puCat = refUnit(cs, cat);
     const impCat = cant * puCat;
     totalCat += impCat;
     const cells = [cat.clave, cat.descripcion, cat.unidad, cant, puCat, impCat];
@@ -1445,9 +1449,13 @@ export function exportComparativaPdf(obra, sub, conceptosAll) {
     .filter(([_, l]) => !l.archivado)
     .map(([id, l]) => ({ id, ...l }));
 
+  // esDestajo/refUnit se capturan aquí porque `meta` se re-declara dentro del loop.
+  const esDestajo = (sub.meta || {}).tipo === 'destajo';
+  const refUnit = (cs, cat) => esDestajo ? (Number(cs?.manoObraUnitario) || 0) : (Number(cat?.precio_unitario) || 0);
+
   const { jsPDF } = window.jspdf;
   const doc = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'letter' });
-  drawObraHeader(doc, m, `COMPARATIVA — ${meta.nombre || 'Subcontrato'}`);
+  drawObraHeader(doc, m, `COMPARATIVA — ${meta.nombre || 'Subcontrato'}${esDestajo ? ' (Destajo)' : ''}`);
 
   // ===== Cómputos por concepto =====
   let totalCat = 0;
@@ -1461,7 +1469,7 @@ export function exportComparativaPdf(obra, sub, conceptosAll) {
     const cat = conceptosAll[cs.conceptoId];
     if (!cat) continue;
     const cant = Number(cs.cantidadSub) || 0;
-    const puCat = cat.precio_unitario || 0;
+    const puCat = refUnit(cs, cat);
     const impCat = cant * puCat;
     totalCat += impCat;
 
@@ -1501,7 +1509,7 @@ export function exportComparativaPdf(obra, sub, conceptosAll) {
       { content: 'Descripción', rowSpan: 2 },
       { content: 'U.', rowSpan: 2 },
       { content: 'Cant.', rowSpan: 2 },
-      { content: 'CATÁLOGO', colSpan: 2, styles: { halign: 'center' } },
+      { content: esDestajo ? 'MANO DE OBRA (ref.)' : 'CATÁLOGO', colSpan: 2, styles: { halign: 'center' } },
       ...lics.map(l => ({ content: truncate(l.nombre || '', 24), colSpan: 3, styles: { halign: 'center' } }))
     ],
     [

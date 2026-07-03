@@ -540,6 +540,9 @@ export async function createSubcontrato(obraId, data) {
     meta: {
       nombre: data.nombre || 'Subcontrato',
       descripcion: data.descripcion || '',
+      // 'subcontrato' = obra a precio unitario completo; 'destajo' = solo mano
+      // de obra (la comparativa se hace contra la MO de referencia, no el PU).
+      tipo: data.tipo === 'destajo' ? 'destajo' : 'subcontrato',
       estado: 'cotizando',
       licitanteAdjudicadoId: null,
       createdAt: Date.now(),
