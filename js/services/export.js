@@ -426,7 +426,7 @@ export function buildResumenData(obra, estId) {
     m, est, ivaPct, anticipoPct, rows, totalPpto, estims,
     subtotalEsta, ivaEsta, importeEsta: importeEstaBruto,
     avPond, importeAcumEjec, importeAcumEjecCIVA,
-    anticipoMontoBase, anticipoMontoCIVA,
+    anticipoMontoBase, anticipoMontoCIVA, anticipoTotal,
     amortizacionEsta, amortizacionAcum, saldoAnticipoPorAmortizar,
     netoEsta, netoAcum,
     pagoCliente: est.pagoCliente || null,
@@ -550,7 +550,7 @@ function applyPrintFilter(rows, cfg) {
 export function exportResumenXlsx(obra, estId, cfg = {}) {
   cfg = { ...DEFAULT_PRINT_CFG, ...cfg };
   const data = buildResumenData(obra, estId);
-  const { m, est, ivaPct, anticipoPct, subtotalEsta, ivaEsta, importeEsta, avPond, diferencia, diferenciaPct, importeAcumEjec, importeAcumEjecCIVA, subtotalPagado, ivaPagado, importePagado, anticipoMontoBase, amortizacionEsta, amortizacionAcum, saldoAnticipoPorAmortizar, netoEsta, netoAcum } = data;
+  const { m, est, ivaPct, anticipoPct, subtotalEsta, ivaEsta, importeEsta, avPond, diferencia, diferenciaPct, importeAcumEjec, importeAcumEjecCIVA, subtotalPagado, ivaPagado, importePagado, anticipoMontoBase, anticipoTotal, amortizacionEsta, amortizacionAcum, saldoAnticipoPorAmortizar, netoEsta, netoAcum } = data;
   const rows = applyPrintFilter(data.rows, cfg);
   const titulo = cfg.modo === 'estadoCuenta' ? 'ESTADO DE CUENTA' : 'RESUMEN DE ESTIMACIÓN';
 
@@ -615,7 +615,7 @@ export function exportResumenXlsx(obra, estId, cfg = {}) {
     aoa.push(['DIFERENCIA FINANCIERA %', '', '', diferenciaPct]);
     aoa.push(['AVANCE OBRA (Σ ponderado)', '', '', avPond]);
     if (cfg.mostrarAmortizacion && anticipoPct > 0) {
-      aoa.push([`Anticipo total otorgado (${(anticipoPct * 100).toFixed(2)}%)`, '', '', anticipoMontoBase]);
+      aoa.push([`Anticipo total otorgado (${(anticipoPct * 100).toFixed(2)}%)`, '', '', anticipoTotal]);
       aoa.push(['Saldo de anticipo por amortizar', '', '', saldoAnticipoPorAmortizar]);
     }
   }
@@ -659,7 +659,7 @@ export function exportResumenXlsx(obra, estId, cfg = {}) {
 export async function exportResumenPdf(obra, estId, cfg = {}) {
   cfg = { ...DEFAULT_PRINT_CFG, ...cfg };
   const data = buildResumenData(obra, estId);
-  const { m, est, ivaPct, anticipoPct, subtotalEsta, ivaEsta, importeEsta, avPond, diferencia, diferenciaPct, importeAcumEjec, importeAcumEjecCIVA, subtotalPagado, ivaPagado, importePagado, anticipoMontoBase, amortizacionEsta, amortizacionAcum, saldoAnticipoPorAmortizar, netoEsta, netoAcum } = data;
+  const { m, est, ivaPct, anticipoPct, subtotalEsta, ivaEsta, importeEsta, avPond, diferencia, diferenciaPct, importeAcumEjec, importeAcumEjecCIVA, subtotalPagado, ivaPagado, importePagado, anticipoMontoBase, anticipoTotal, amortizacionEsta, amortizacionAcum, saldoAnticipoPorAmortizar, netoEsta, netoAcum } = data;
   const rows = applyPrintFilter(data.rows, cfg);
   const isEstadoCuenta = cfg.modo === 'estadoCuenta';
 
@@ -770,7 +770,7 @@ export async function exportResumenPdf(obra, estId, cfg = {}) {
       doc.setTextColor(40); doc.setFontSize(9);
       doc.text(`SALDO DE ANTICIPO POR AMORTIZAR`, 40, yy + lh * 2);
       doc.setTextColor(20); doc.setFontSize(11);
-      doc.text(`${money(saldoAnticipoPorAmortizar)} de ${money(anticipoMontoBase)}`, doc.internal.pageSize.width - 40, yy + lh * 2, { align: 'right' });
+      doc.text(`${money(saldoAnticipoPorAmortizar)} de ${money(anticipoTotal)}`, doc.internal.pageSize.width - 40, yy + lh * 2, { align: 'right' });
       yy += lh;
     }
 
