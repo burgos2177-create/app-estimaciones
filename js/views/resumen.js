@@ -8,6 +8,7 @@ import { rread, loadObra, setPagoCliente, getObraLinks, listBuzonItems, pushBuzo
 import { state } from '../state/store.js';
 import { money, num, dateMx, pct } from '../util/format.js';
 import { buildResumenData, exportResumenPdf, exportResumenXlsx, exportEstimacionJson } from '../services/export.js';
+import { amortRateOnSubtotal } from '../services/contrato.js';
 
 export async function renderResumen({ params }) {
   const obraId = params.id;
@@ -310,13 +311,25 @@ async function editPagoDialog(obraId, estId, est, ivaPct) {
 }
 
 async function sincronizarConBuzon(obraId, estId, est, pago) {
-  // Lee link de obra → proyecto contable y nombre de obra para el snapshot
-  const [links, obraMeta] = await Promise.all([
+  // Lee link de obra → proyecto contable, meta e integración para el snapshot
+  const [links, obraMeta, integ] = await Promise.all([
     getObraLinks(),
-    rread(`obras/${obraId}/meta`)
+    rread(`obras/${obraId}/meta`),
+    rread(`obras/${obraId}/integracion`)
   ]);
   const proyectoId = links?.[obraId] || null;
   const obraNombre = obraMeta?.nombre || '';
+
+  // Desglose que bitácora necesita: importe sin IVA, IVA y amortización de
+  // anticipo SEPARADOS. La amortización es proporcional al avance (subtotal) de
+  // esta estimación, según la base del anticipo de la obra.
+  const ivaPct = Number(obraMeta?.ivaPct ?? 0.16);
+  const anticipoPct = Number(obraMeta?.anticipoPct ?? 0);
+  const anticipoBase = integ?.anticipo_base || 'subtotal';
+  const amortRate = amortRateOnSubtotal(anticipoPct, anticipoBase, ivaPct);
+  const importe_sin_iva = Number(pago.subtotal) || 0;
+  const iva = Number(pago.iva) || 0;
+  const amortizacion_anticipo = Math.round(importe_sin_iva * amortRate * 100) / 100;
 
   // Busca si ya hay un item PENDIENTE o HUÉRFANO para esta estimación. Si sí,
   // lo actualiza (vuelve a pendiente). Si está aprobado, no debería llegar aquí
@@ -338,6 +351,10 @@ async function sincronizarConBuzon(obraId, estId, est, pago) {
     estimId: estId,
     estimNumero: est.numero,
     monto: pago,
+    // Desglose para bitácora (bolsitas de costo + bolsita de IVA):
+    importe_sin_iva,
+    iva,
+    amortizacion_anticipo,
     fecha: pago.fecha,
     descripcion: `Pago de estimación #${est.numero}${proyectoId ? '' : ' (obra sin vincular a proyecto contable)'}`,
     estado: 'pendiente',

@@ -1,7 +1,8 @@
 import { h, toast, modal } from '../util/dom.js';
 import { renderShell } from './shell.js';
 import { state, setState } from '../state/store.js';
-import { rread, loadObra, updateObraMeta, reconcileCatalogo } from '../services/db.js';
+import { rread, loadObra, updateObraMeta, reconcileCatalogo, setObraIntegracion } from '../services/db.js';
+import { buildIntegracionForm } from './_integracion-form.js';
 import { parseOpusXLS } from '../services/opus-parser.js';
 import { navigate } from '../state/router.js';
 import { money, dateMx, num0, pct } from '../util/format.js';
@@ -278,11 +279,13 @@ async function editMetaDialog(obraId, m) {
     h('option', { value: 'PRIVADO', selected: m.programa === 'PRIVADO' }, 'PRIVADO'),
     h('option', { value: 'PÚBLICO', selected: m.programa === 'PÚBLICO' }, 'PÚBLICO')
   ]);
-  const monto = h('input', { type: 'number', step: '0.01', value: m.montoContratoCIVA ?? 0 });
-  const ivaPct = h('input', { type: 'number', step: '0.0001', value: m.ivaPct ?? 0.16 });
-  const anticipoPct = h('input', { type: 'number', step: '0.01', min: '0', max: '1', value: m.anticipoPct ?? 0 });
   const fI = h('input', { type: 'date', value: m.fechaInicio ? new Date(m.fechaInicio).toISOString().slice(0,10) : '' });
   const fF = h('input', { type: 'date', value: m.fechaFin ? new Date(m.fechaFin).toISOString().slice(0,10) : '' });
+
+  // Integración OPUS (deriva el contrato). Prefill desde la existente si la hay.
+  let integracionActual = null;
+  try { integracionActual = await rread(`obras/${obraId}/integracion`); } catch {}
+  const integ = buildIntegracionForm(integracionActual || { iva_pct: m.ivaPct ?? 0.16, anticipo_pct: m.anticipoPct ?? 0 });
 
   const body = h('div', {}, [
     h('div', { class: 'field' }, [h('label', {}, 'Nombre'), nombre]),
@@ -295,13 +298,12 @@ async function editMetaDialog(obraId, m) {
       h('div', { class: 'field' }, [h('label', {}, 'Ubicación'), ubicacion]),
       h('div', { class: 'field' }, [h('label', {}, 'Municipio'), municipio])
     ]),
-    h('div', { class: 'grid-4' }, [
-      h('div', { class: 'field' }, [h('label', {}, 'Programa'), programa]),
-      h('div', { class: 'field' }, [h('label', {}, 'Monto C/IVA'), monto]),
-      h('div', { class: 'field' }, [h('label', {}, 'IVA'), ivaPct]),
-      h('div', { class: 'field' }, [h('label', {}, '% Anticipo'), anticipoPct])
-    ]),
-    h('div', { class: 'grid-2' }, [
+    h('div', { class: 'field' }, [h('label', {}, 'Programa'), programa]),
+    integ.node,
+    (!integracionActual && m.montoContratoCIVA)
+      ? h('p', { class: 'muted', style: { fontSize: '11px' } }, `Esta obra tenía monto manual (${money(m.montoContratoCIVA)}). Si dejas Costo directo en 0, se conserva ese monto.`)
+      : null,
+    h('div', { class: 'grid-2', style: { marginTop: '10px' } }, [
       h('div', { class: 'field' }, [h('label', {}, 'Inicio'), fI]),
       h('div', { class: 'field' }, [h('label', {}, 'Fin'), fF])
     ])
@@ -310,15 +312,21 @@ async function editMetaDialog(obraId, m) {
   await modal({
     title: 'Editar obra', body, confirmLabel: 'Guardar',
     onConfirm: async () => {
-      await updateObraMeta(obraId, {
+      const baseMeta = {
         nombre: nombre.value, contratoNo: contratoNo.value, cliente: cliente.value,
         construye: construye.value, ubicacion: ubicacion.value, municipio: municipio.value,
-        programa: programa.value, montoContratoCIVA: Number(monto.value) || 0,
-        ivaPct: Number(ivaPct.value) || 0.16,
-        anticipoPct: Number(anticipoPct.value) || 0,
+        programa: programa.value,
         fechaInicio: fI.value ? new Date(fI.value).getTime() : null,
         fechaFin: fF.value ? new Date(fF.value).getTime() : null
-      });
+      };
+      await updateObraMeta(obraId, baseMeta);
+      const input = integ.readInput();
+      if (input.costo_directo > 0) {
+        await setObraIntegracion(obraId, input);      // deriva monto/IVA/anticipo
+      } else {
+        // Modo manual legacy: conserva montoContratoCIVA, pero ajusta IVA/anticipo.
+        await updateObraMeta(obraId, { ivaPct: input.iva_pct || 0.16, anticipoPct: input.anticipo_pct || 0 });
+      }
       toast('Obra actualizada', 'ok');
       renderObra({ params: { id: obraId } });
       return true;

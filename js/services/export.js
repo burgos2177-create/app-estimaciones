@@ -6,6 +6,7 @@
 //  - RESUMEN de una estimación (carátula + estado de cuenta para entrega)
 
 import { calcGeneradorTotal, getColumns, calcPartidaTotal } from './plantillas.js';
+import { amortRateOnSubtotal } from './contrato.js';
 import { getImageObjectUrl, isSignedIn as driveSignedIn } from './drive.js';
 
 const fmtMxn = new Intl.NumberFormat('es-MX', { style: 'currency', currency: 'MXN', minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -396,12 +397,18 @@ export function buildResumenData(obra, estId) {
   // El anticipo otorgado se calcula sobre el SUBTOTAL DEL CONTRATO (monto C/IVA / (1+IVA)),
   // no sobre la Σ del catálogo, porque ambos pueden divergir si el catálogo importado no
   // representa el alcance contratado completo.
-  const subtotalContrato = (Number(m.montoContratoCIVA) || 0) / (1 + ivaPct);
-  const anticipoMontoBase = subtotalContrato * anticipoPct;     // sin IVA
+  const anticipoBase = obra.integracion?.anticipo_base || 'subtotal';
+  const subtotalContrato = Number(obra.integracion?.subtotal_venta)
+    || ((Number(m.montoContratoCIVA) || 0) / (1 + ivaPct));
+  const anticipoMontoBase = subtotalContrato * anticipoPct;     // anticipo sin IVA
   const anticipoMontoCIVA = anticipoMontoBase * (1 + ivaPct);
-  const amortizacionEsta = subtotalEsta * anticipoPct;
-  const amortizacionAcum = importeAcumEjec * anticipoPct;
-  const saldoAnticipoPorAmortizar = anticipoMontoBase - amortizacionAcum;
+  // Tasa de amortización sobre el subtotal ejecutado. Con base 'total_c_iva' se
+  // amortiza pct*(1+iva) para recuperar el anticipo calculado sobre el monto c/IVA.
+  const amortRate = amortRateOnSubtotal(anticipoPct, anticipoBase, ivaPct);
+  const amortizacionEsta = subtotalEsta * amortRate;
+  const amortizacionAcum = importeAcumEjec * amortRate;
+  const anticipoTotal = anticipoBase === 'total_c_iva' ? anticipoMontoCIVA : anticipoMontoBase;
+  const saldoAnticipoPorAmortizar = anticipoTotal - amortizacionAcum;
   const netoEsta = importeEstaBruto - amortizacionEsta;
   const netoAcum = importeAcumEjecCIVA - amortizacionAcum;
 

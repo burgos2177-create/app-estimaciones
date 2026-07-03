@@ -5,6 +5,7 @@ import { listObrasForUser, createObra } from '../services/db.js';
 import { navigate } from '../state/router.js';
 import { money, dateMx, pct } from '../util/format.js';
 import { modal, toast } from '../util/dom.js';
+import { buildIntegracionForm } from './_integracion-form.js';
 
 export async function renderObrasList() {
   renderShell([{ label: 'Obras' }], h('div', {}, [h('div', { class: 'empty' }, 'Cargando obras…')]));
@@ -67,11 +68,11 @@ async function newObraDialog() {
     h('option', { value: 'PRIVADO' }, 'PRIVADO'),
     h('option', { value: 'PÚBLICO' }, 'PÚBLICO')
   ]);
-  const monto = h('input', { type: 'number', step: '0.01', placeholder: 'Monto contrato (con IVA)' });
-  const ivaPct = h('input', { type: 'number', step: '0.0001', value: '0.16' });
-  const anticipoPct = h('input', { type: 'number', step: '0.01', min: '0', max: '1', value: '0', placeholder: '0.30 = 30%' });
   const fInicio = h('input', { type: 'date' });
   const fFin = h('input', { type: 'date' });
+
+  // El "Monto C/IVA" ya NO se teclea: se deriva de la integración OPUS.
+  const integ = buildIntegracionForm();
 
   const body = h('div', {}, [
     h('div', { class: 'field' }, [h('label', {}, 'Nombre'), nombre]),
@@ -84,13 +85,12 @@ async function newObraDialog() {
       h('div', { class: 'field' }, [h('label', {}, 'Ubicación'), ubicacion]),
       h('div', { class: 'field' }, [h('label', {}, 'Municipio'), municipio])
     ]),
-    h('div', { class: 'grid-4' }, [
-      h('div', { class: 'field' }, [h('label', {}, 'Programa'), programa]),
-      h('div', { class: 'field' }, [h('label', {}, 'Monto C/IVA'), monto]),
-      h('div', { class: 'field' }, [h('label', {}, 'IVA'), ivaPct]),
-      h('div', { class: 'field' }, [h('label', {}, '% Anticipo'), anticipoPct])
-    ]),
     h('div', { class: 'grid-2' }, [
+      h('div', { class: 'field' }, [h('label', {}, 'Programa'), programa]),
+      h('div', {}, [])
+    ]),
+    integ.node,
+    h('div', { class: 'grid-2', style: { marginTop: '10px' } }, [
       h('div', { class: 'field' }, [h('label', {}, 'Fecha inicio'), fInicio]),
       h('div', { class: 'field' }, [h('label', {}, 'Fecha fin'), fFin])
     ])
@@ -105,9 +105,8 @@ async function newObraDialog() {
         const id = await createObra({
           nombre: nombre.value, contratoNo: contratoNo.value, cliente: cliente.value,
           construye: construye.value, ubicacion: ubicacion.value, municipio: municipio.value,
-          programa: programa.value, montoContratoCIVA: monto.value,
-          ivaPct: ivaPct.value || 0.16,
-          anticipoPct: anticipoPct.value || 0,
+          programa: programa.value,
+          integracion: integ.readInput(),   // deriva montoContratoCIVA, ivaPct, anticipoPct
           fechaInicio: fInicio.value ? new Date(fInicio.value).getTime() : null,
           fechaFin: fFin.value ? new Date(fFin.value).getTime() : null
         }, state.user.uid);

@@ -4,6 +4,7 @@ import {
 import { db } from './firebase.js';
 import { APP_BASE_PATH } from '../config/firebase-config.js';
 import { computeStableKey, computeConceptoKey, sanitizeConcepto } from './catalogo-keys.js';
+import { computeContrato } from './contrato.js';
 
 // Prefija toda path relativa con APP_BASE_PATH (e.g. "obras/X" → "legacy/estimaciones/obras/X").
 // Para escapes que necesiten path absoluto en el RTDB compartido (p.ej. /shared/buzon),
@@ -58,8 +59,44 @@ export async function listObrasForUser(user) {
   return out;
 }
 
+// Construye el bloque `integracion` persistible desde los inputs crudos + la
+// cascada derivada. Exclusivo de estimaciones (nadie más escribe aquí).
+function buildIntegracionBlock(input, c) {
+  return {
+    costo_directo: c.costo_directo,
+    pct_ind_oficina: c.pct_ind_oficina,
+    pct_ind_campo: c.pct_ind_campo,
+    pct_financiamiento: c.pct_financiamiento,
+    pct_utilidad: c.pct_utilidad,
+    pct_cargos_adicionales: c.pct_cargos_adicionales,
+    pct_otro: c.pct_otro,
+    subtotal_venta: c.subtotal_venta,        // DERIVADO
+    iva_pct: c.iva_pct,
+    iva_monto: c.iva_monto,                  // DERIVADO
+    monto_con_iva: c.monto_con_iva,          // DERIVADO (= contrato)
+    anticipo_pct: Number(input.anticipo_pct) || 0,
+    anticipo_base: input.anticipo_base === 'total_c_iva' ? 'total_c_iva' : 'subtotal',
+    updatedAt: Date.now()
+  };
+}
+
 export async function createObra(meta, ownerUid) {
   const r = push(_ref('obras'));
+
+  // Si viene la integración OPUS, el contrato se DERIVA (no se teclea a mano).
+  const integracionInput = meta.integracion || null;
+  let montoContratoCIVA = Number(meta.montoContratoCIVA) || 0;
+  let ivaPct = Number(meta.ivaPct ?? 0.16);
+  let anticipoPct = Number(meta.anticipoPct ?? 0);
+  let integracionBlock = null;
+  if (integracionInput) {
+    const c = computeContrato(integracionInput);
+    integracionBlock = buildIntegracionBlock(integracionInput, c);
+    montoContratoCIVA = c.monto_con_iva;
+    ivaPct = c.iva_pct;
+    anticipoPct = integracionBlock.anticipo_pct;
+  }
+
   const obra = {
     meta: {
       nombre: meta.nombre || 'Sin nombre',
@@ -67,19 +104,20 @@ export async function createObra(meta, ownerUid) {
       municipio: meta.municipio || '',
       programa: meta.programa || 'PRIVADO',
       contratoNo: meta.contratoNo || '',
-      montoContratoCIVA: Number(meta.montoContratoCIVA) || 0,
+      montoContratoCIVA,                     // DERIVADO de la integración si existe
       fechaInicio: meta.fechaInicio || null,
       fechaFin: meta.fechaFin || null,
       construye: meta.construye || '',
       cliente: meta.cliente || '',
-      ivaPct: Number(meta.ivaPct ?? 0.16),
-      anticipoPct: Number(meta.anticipoPct ?? 0),
+      ivaPct,
+      anticipoPct,
       driveFolderId: '',
       ownerUid,
       createdAt: Date.now(),
       updatedAt: Date.now()
     }
   };
+  if (integracionBlock) obra.integracion = integracionBlock;
   await set(r, obra);
   return r.key;
 }
@@ -87,6 +125,21 @@ export async function createObra(meta, ownerUid) {
 export async function updateObraMeta(obraId, patch) {
   patch.updatedAt = Date.now();
   await update(_ref(`obras/${obraId}/meta`), patch);
+}
+
+// Escribe la integración OPUS de una obra y DERIVA (sobreescribe) el contrato en
+// meta: montoContratoCIVA, ivaPct y anticipoPct. Es la única vía para setear el
+// contrato cuando la obra usa integración.
+export async function setObraIntegracion(obraId, input) {
+  const c = computeContrato(input);
+  const block = buildIntegracionBlock(input, c);
+  await set(_ref(`obras/${obraId}/integracion`), block);
+  await updateObraMeta(obraId, {
+    montoContratoCIVA: c.monto_con_iva,
+    ivaPct: c.iva_pct,
+    anticipoPct: block.anticipo_pct
+  });
+  return { contrato: c, block };
 }
 
 export async function deleteObra(obraId) {
