@@ -230,3 +230,77 @@ input[disabled], select[disabled], textarea[disabled] { opacity: .55; cursor: no
 .obra-card .progress > div { height: 100%; background: var(--accent); }
 .obra-card .stats { display: flex; gap: 14px; margin-top: 10px; font-size: 11px; color: var(--text-2); }
 .obra-card .stats b { color: var(--text-1); font-weight: 600; }
+
+/* ==========================================================================
+   VISTA MÓVIL
+   Adaptación responsiva. NO altera el layout de escritorio: todo vive dentro
+   de media queries que SOLO aplican en pantallas angostas. Los estilos de PC
+   de arriba quedan intactos.
+   ========================================================================== */
+@media (max-width: 768px) {
+  /* Inputs a >=16px evita el zoom automático de iOS al enfocar */
+  input, select, textarea { font-size: 16px; }
+
+  /* Layout general con menos padding */
+  .page { padding: 14px 12px; }
+  .page h1 { font-size: 19px; margin-bottom: 12px; }
+  .page h2 { font-size: 15px; margin: 18px 0 10px; }
+
+  /* Topbar: envuelve y compacta; los crumbs pasan a una segunda línea */
+  .topbar { flex-wrap: wrap; gap: 8px 10px; padding: 8px 12px; }
+  .topbar .logo { font-size: 14px; }
+  .topbar .spacer { flex: 1 1 auto; }
+  .topbar .userchip { font-size: 11px; padding: 3px 8px; }
+  .topbar .crumbs { order: 3; width: 100%; font-size: 12px; flex-wrap: wrap; gap: 4px 6px; }
+
+  /* Grids colapsan */
+  .grid-2, .grid-3 { grid-template-columns: 1fr; }
+  .grid-4 { grid-template-columns: 1fr 1fr; }
+
+  /* Cards y modales más compactos y a ancho completo */
+  .card { padding: 14px; }
+  .modal { width: 100%; max-width: 96vw; padding: 16px; max-height: 94vh; }
+  .modal.lg, .modal.xl, .modal.full { width: 100%; }
+  .modal .actions { position: sticky; bottom: -16px; background: var(--bg-1); padding: 12px 0 2px; }
+
+  /* Botones con objetivo táctil más cómodo */
+  .btn { padding: 9px 14px; }
+  .btn.sm { padding: 6px 11px; }
+
+  /* Tablas: scroll horizontal contenido. Al pasar la tabla a display:block, el
+     navegador genera una caja de tabla anónima interna, así que las columnas
+     SIGUEN alineadas mientras el bloque hace scroll en X. */
+  .tbl, .cat-table {
+    display: block;
+    width: 100%;
+    max-width: 100%;
+    /* contain:inline-size fuerza el ancho al del contenedor (las tablas si no
+       crecen hasta su min-content y empujan toda la página); el contenido ancho
+       hace scroll horizontal DENTRO de la tabla, sin mover cards ni la página. */
+    contain: inline-size;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  .cat-table { table-layout: auto; }
+  .cat-table .clave, .cat-table .desc { max-width: none; }
+
+  /* Listas de tarjetas a una columna */
+  .obras-grid { grid-template-columns: 1fr; }
+  .attach-grid { grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 10px; }
+  /* En móvil las acciones de adjunto siempre visibles (no hay hover) */
+  .attach-actions { opacity: 1; }
+
+  /* Login a ancho completo, anclado arriba */
+  .login-shell { padding: 16px; align-items: flex-start; padding-top: 36px; }
+  .login-card { width: 100%; max-width: 400px; padding: 22px; }
+
+  /* Toasts full-width abajo, sin tapar toda la pantalla */
+  .toast-root { left: 12px; right: 12px; bottom: 12px; }
+}
+
+/* Teléfonos muy angostos */
+@media (max-width: 420px) {
+  .grid-4 { grid-template-columns: 1fr; }
+  .page h1 { font-size: 18px; }
+  .row { gap: 6px; }
+}
