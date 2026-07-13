@@ -304,3 +304,53 @@ input[disabled], select[disabled], textarea[disabled] { opacity: .55; cursor: no
   .page h1 { font-size: 18px; }
   .row { gap: 6px; }
 }
+
+/* ================= Bitácora de obra ================= */
+.bit-vt { display: flex; border: 1px solid var(--border); border-radius: 7px; overflow: hidden; }
+.bit-vt button { background: transparent; color: var(--text-1); padding: 7px 11px; border: none; font-size: 11px; cursor: pointer; }
+.bit-vt button.on { background: var(--bg-3); color: var(--accent); }
+.bit-search { max-width: 260px; }
+.bit-chip { background: transparent; border: 1px solid var(--border); color: var(--text-1); border-radius: 20px; padding: 5px 12px; font-size: 11px; cursor: pointer; }
+.bit-chip.on { border-color: var(--accent); color: var(--accent); background: rgba(76,194,255,.08); }
+.bit-avbar { height: 8px; background: var(--bg-0); border-radius: 6px; overflow: hidden; border: 1px solid var(--border); }
+.bit-avbar i { display: block; height: 100%; background: linear-gradient(90deg, var(--accent-2), var(--accent)); }
+
+.bit-nota { background: var(--bg-1); border: 1px solid var(--border); border-left: 3px solid var(--border-strong); border-radius: 10px; margin-bottom: 14px; overflow: hidden; }
+.bit-nota.asentada { border-left-color: var(--accent); }
+.bit-nota.anulada { border-left-color: var(--danger); opacity: .78; }
+.bit-nota.borrador { border-left-color: var(--warn); }
+.bit-nh { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 12px 14px; border-bottom: 1px dashed var(--border); }
+.bit-folio { font-weight: 700; font-size: 15px; color: var(--accent); min-width: 74px; }
+.bit-nota.anulada .bit-folio { text-decoration: line-through; color: var(--danger); }
+.bit-cls { font-size: 9.5px; letter-spacing: 1.5px; text-transform: uppercase; padding: 3px 9px; border-radius: 4px; background: var(--bg-3); border: 1px solid var(--border); color: var(--text-1); }
+.bit-status { font-size: 9.5px; letter-spacing: 1.5px; text-transform: uppercase; }
+.bit-status.s-asentada { color: var(--ok); } .bit-status.s-borrador { color: var(--warn); } .bit-status.s-anulada { color: var(--danger); }
+.bit-asunto { font-size: 13.5px; margin-bottom: 10px; white-space: pre-wrap; }
+.bit-nota.anulada .bit-asunto { text-decoration: line-through; color: var(--text-2); }
+.bit-ref { font-size: 10.5px; color: var(--warn); margin-bottom: 8px; }
+.bit-det { display: grid; grid-template-columns: 140px 1fr; gap: 4px 12px; font-size: 12px; margin-bottom: 10px; }
+.bit-det dt { color: var(--text-2); font-size: 10px; letter-spacing: 1px; text-transform: uppercase; padding-top: 2px; }
+.bit-det dd { color: var(--text-0); white-space: pre-wrap; }
+.bit-fotos { display: flex; gap: 8px; flex-wrap: wrap; margin: 10px 0; }
+.bit-fotos img { width: 110px; height: 82px; object-fit: cover; border-radius: 6px; border: 1px solid var(--border); cursor: pointer; }
+.bit-firmas { display: flex; gap: 24px; flex-wrap: wrap; border-top: 1px dashed var(--border); padding-top: 10px; margin-top: 8px; }
+.bit-firma b { display: block; color: var(--text-0); font-weight: 500; font-size: 12px; }
+.bit-firma span { color: var(--text-2); font-size: 10px; letter-spacing: 1px; text-transform: uppercase; }
+.bit-sello { font-size: 10px; color: var(--text-2); border-top: 1px dashed var(--border); padding-top: 8px; margin-top: 8px; }
+.bit-fotoprev { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+.bit-fotoprev .fp { position: relative; }
+.bit-fotoprev img { width: 90px; height: 68px; object-fit: cover; border-radius: 6px; border: 1px solid var(--border); }
+.bit-fotoprev button { position: absolute; top: -6px; right: -6px; width: 20px; height: 20px; border-radius: 50%; background: var(--danger); color: #fff; border: none; font-size: 11px; cursor: pointer; }
+.bit-lightbox { position: fixed; inset: 0; background: rgba(5,5,10,.92); z-index: 200; display: flex; align-items: center; justify-content: center; cursor: zoom-out; }
+.bit-lightbox img { max-width: 94vw; max-height: 92vh; border-radius: 8px; }
+
+/* vista móvil forzada (toggle) */
+body.bit-mobile .grid-2, body.bit-mobile .grid-3, body.bit-mobile .grid-4 { grid-template-columns: 1fr 1fr; }
+body.bit-mobile .bit-det { grid-template-columns: 1fr; gap: 1px; }
+body.bit-mobile .bit-det dt { margin-top: 7px; }
+body.bit-mobile .bit-search { max-width: none; flex: 1; }
+body.bit-mobile .bit-fotos img { width: calc(33.33% - 6px); height: 76px; }
+@media print {
+  .topbar, .bit-vt, .bit-chip, .bit-search, .bit-nota .row, .row .btn { display: none !important; }
+  .bit-nota { break-inside: avoid; }
+}

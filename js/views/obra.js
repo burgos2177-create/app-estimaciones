@@ -127,7 +127,8 @@ export async function renderObra({ params }) {
       h('button', { class: 'btn', onClick: () => navigate(`/obras/${obraId}/estimaciones`) }, [`Estimaciones (${numEsts})`]),
       h('button', { class: 'btn', onClick: () => navigate(`/obras/${obraId}/f1`) }, 'F-1 / Concentrado'),
       h('button', { class: 'btn', onClick: () => navigate(`/obras/${obraId}/resumen`) }, 'RESUMEN / Estado de cuenta'),
-      h('button', { class: 'btn', onClick: () => navigate(`/obras/${obraId}/subcontratos`) }, [`Subcontratos (${numSubs})`])
+      h('button', { class: 'btn', onClick: () => navigate(`/obras/${obraId}/subcontratos`) }, [`Subcontratos (${numSubs})`]),
+      h('button', { class: 'btn', onClick: () => navigate(`/obras/${obraId}/bitacora`) }, '📓 Bitácora de obra')
     ])
   ]);
 

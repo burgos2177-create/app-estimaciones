@@ -17,6 +17,7 @@ import { renderSubcontratos } from './views/subcontratos.js';
 import { renderSubcontrato } from './views/subcontrato.js';
 import { renderSubEstimacion } from './views/sub-estimacion.js';
 import { renderGaleria } from './views/galeria.js';
+import { renderBitacora } from './views/bitacora.js';
 import { renderConcepto } from './views/stubs.js';
 import { h, mount } from './util/dom.js';
 
@@ -31,6 +32,7 @@ route('/obras/:id/estimaciones/:estid',                          renderEstimacio
 route('/obras/:id/estimaciones/:estid/generadores/:gid',         renderGenerador);
 route('/obras/:id/f1',                                           renderF1);
 route('/obras/:id/resumen',                                      renderResumen);
+route('/obras/:id/bitacora',                                     renderBitacora);
 route('/obras/:id/subcontratos',                                 renderSubcontratos);
 route('/obras/:id/subcontratos/:subid',                          renderSubcontrato);
 route('/obras/:id/subcontratos/:subid/:tab',                     renderSubcontrato);
