@@ -11,11 +11,14 @@ self.addEventListener('activate', (e) => e.waitUntil(self.clients.claim()));
 self.addEventListener('fetch', (event) => {
   const req = event.request;
   if (req.method !== 'GET') return;
+  const sameOrigin = req.url.startsWith(self.location.origin);
   event.respondWith(
-    fetch(req)
+    // Para recursos propios forzamos cache:'no-store' → así el fetch ignora la
+    // caché HTTP de GitHub Pages y SIEMPRE trae el código recién publicado
+    // (antes, fetch normal podía servir hasta ~10 min de código viejo).
+    fetch(req, sameOrigin ? { cache: 'no-store' } : undefined)
       .then((res) => {
-        // Guarda copia en caché solo de recursos propios y respuestas válidas.
-        if (res && res.ok && req.url.startsWith(self.location.origin)) {
+        if (res && res.ok && sameOrigin) {
           const copy = res.clone();
           caches.open(CACHE).then((c) => c.put(req, copy)).catch(() => {});
         }
