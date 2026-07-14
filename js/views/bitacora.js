@@ -322,7 +322,7 @@ function notaCard(n) {
     h('div', { class: 'bit-nh' }, [
       h('span', { class: 'bit-folio' }, folioStr(n.folio)),
       h('span', { class: 'bit-cls' }, n.cls),
-      h('span', { class: 'muted', style: { fontSize: '11px' } }, fmtDT(n.fecha)),
+      h('span', { class: 'muted', style: { fontSize: '11px' } }, n.estado === 'borrador' ? ('Reportado ' + fmtDT(n.reportadoEn || n.creadaEn)) : fmtDT(n.fecha)),
       h('span', { class: 'bit-status s-' + n.estado, style: { marginLeft: 'auto' } }, n.estado === 'asentada' ? '● Asentada' : n.estado === 'borrador' ? '○ Borrador' : '✕ Anulada')
     ]),
     h('div', { style: { padding: '12px 14px' } }, [
@@ -334,6 +334,8 @@ function notaCard(n) {
       h('div', { class: 'bit-firmas' }, [
         firma(n.emiteNombre, 'Emite'), firma(n.recibe, 'Recibe / enterado')
       ]),
+      (n.estado === 'asentada' && n.reportadoEn && n.asentadaEn && Math.abs(Date.parse(n.asentadaEn) - n.reportadoEn) > 60000)
+        ? h('div', { class: 'bit-sello', style: { color: 'var(--warn)' } }, `Reportado el ${fmtDT(n.reportadoEn)} · asentado el ${fmtDT(n.asentadaEn)}`) : null,
       n.estado === 'asentada' ? h('div', { class: 'bit-sello' }, `Asentada el ${fmtDT(n.asentadaEn || n.fecha)} · folio consecutivo verificado · registro inalterable`) : null
     ]),
     actions.length ? h('div', { class: 'row', style: { padding: '0 14px 14px' } }, actions) : null
@@ -431,10 +433,23 @@ function openEditor(nota, opts) {
     busy = true;
     try {
       const notaId = isEdit ? nota.id : nid();
-      const baseFotos = isEdit ? (nota.fotos || []) : [];
-      const fotos = [...baseFotos];
-      for (let i = 0; i < V.draft.length; i++) { const f = await subirFoto(V.obraId, notaId, fotos.length, V.draft[i]); fotos.push(f); }
-      const n = { id: notaId, ...(isEdit ? nota : { creadaEn: Date.now() }), ...c, fotos, emiteUid: state.user?.uid || '', emiteNombre: state.user?.displayName || state.user?.email || '' };
+      // Subida de fotos best-effort: si una falla (p.ej. reglas de Storage), NO
+      // se cae el asentado; la nota legal se guarda con las fotos que sí subieron.
+      const fotos = [...(isEdit ? (nota.fotos || []) : [])];
+      let fotoFail = 0;
+      for (let i = 0; i < V.draft.length; i++) {
+        try { fotos.push(await subirFoto(V.obraId, notaId, fotos.length, V.draft[i])); }
+        catch (e) { fotoFail++; console.warn('[Bitácora] foto no subida:', e); }
+      }
+      // Hora de reporte: se sella al primer guardado (borrador) y se conserva al
+      // asentar más tarde. Es informativa; la fecha oficial (art. 94) sigue siendo
+      // la del sistema al asentar.
+      const reportadoEn = (isEdit ? (nota.reportadoEn || nota.creadaEn) : null) || Date.now();
+      const n = Object.assign({}, isEdit ? nota : {}, c, {
+        id: notaId, fotos, reportadoEn,
+        creadaEn: (isEdit ? nota.creadaEn : null) || reportadoEn,
+        emiteUid: state.user?.uid || '', emiteNombre: state.user?.displayName || state.user?.email || ''
+      });
       if (asentar) {
         if (isEdit) { await guardarBorrador(V.obraId, { ...n, estado: 'borrador', folio: 0 }); await asentarNota(V.obraId, notaId); }
         else { await crearNotaAsentada(V.obraId, n); }
@@ -442,7 +457,8 @@ function openEditor(nota, opts) {
         await guardarBorrador(V.obraId, { ...n, estado: 'borrador', folio: n.folio || 0 });
       }
       close();
-      toast(asentar ? 'Nota asentada' : 'Borrador guardado', 'ok');
+      const okMsg = asentar ? 'Nota asentada' : 'Borrador guardado';
+      toast(fotoFail ? `${okMsg}, pero ${fotoFail} foto(s) no se subieron (revisa permisos de Storage).` : okMsg, fotoFail ? 'warn' : 'ok');
       const bit = await loadBitacora(V.obraId); V.meta = bit.meta; V.notas = bit.notas; renderLista();
     } catch (e) { busy = false; toast('Error: ' + (e.message || e), 'danger'); }
   }
