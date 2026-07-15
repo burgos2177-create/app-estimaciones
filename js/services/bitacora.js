@@ -12,7 +12,7 @@
 import { ref, runTransaction } from 'https://www.gstatic.com/firebasejs/10.13.2/firebase-database.js';
 import { db } from './firebase.js';
 import { appPath, rread, rset, rremove, rupdate } from './db.js';
-import { mAsentar, mCrearAsentada, mAnular, nextFolioFrom } from './bitacora-core.js';
+import { mAsentar, mCrearAsentada, mAnular, mAgregarFotos, nextFolioFrom } from './bitacora-core.js';
 
 export { CLS, esMutable, nextFolioFrom } from './bitacora-core.js';
 
@@ -57,4 +57,9 @@ export function crearNotaAsentada(obraId, nota) {
 export function anularNota(obraId, targetId, motivo, notaNueva) {
   const now = new Date().toISOString();
   return _tx(obraId, (notas) => mAnular(notas, targetId, motivo, notaNueva, now));
+}
+// Adjunta fotos (evidencia) a una nota ya guardada/asentada. Transaccional para
+// no pisar fotos que otro residente adjunte a la vez.
+export function agregarFotosNota(obraId, notaId, nuevasFotos) {
+  return _tx(obraId, (notas) => mAgregarFotos(notas, notaId, nuevasFotos));
 }

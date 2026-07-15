@@ -33,12 +33,21 @@ export function comprimir(file) {
   });
 }
 
-export async function subirFoto(obraId, notaId, i, blob) {
-  const path = `bitacora-obra/${obraId}/${notaId}/${i}.jpg`;
+export async function subirFoto(obraId, notaId, key, blob) {
+  const path = `bitacora-obra/${obraId}/${notaId}/${key}.jpg`;
   const r = sref(storage, path);
   await uploadBytes(r, blob, { contentType: 'image/jpeg' });
   const url = await getDownloadURL(r);
   return { url, path };
+}
+
+// Igual que subirFoto pero con TIMEOUT: en obra con señal débil una subida puede
+// colgarse indefinidamente; el timeout la corta para que el flujo nunca se atore.
+export function subirFotoTimeout(obraId, notaId, key, blob, ms = 25000) {
+  return Promise.race([
+    subirFoto(obraId, notaId, key, blob),
+    new Promise((_, rej) => setTimeout(() => rej(new Error('La subida tardó demasiado (señal débil). Reintenta.')), ms))
+  ]);
 }
 
 export async function borrarFoto(path) {

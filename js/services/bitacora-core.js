@@ -44,6 +44,18 @@ export function mCrearAsentada(notas, nota, nowISO) {
   return folio;
 }
 
+// Agrega fotos (evidencia) a una nota existente. Las fotos son ADITIVAS: se
+// permiten incluso en asentadas porque no alteran el texto legal, el folio ni la
+// fecha del sistema — solo adjuntan prueba documental. Nunca quitan ni cambian
+// las existentes. Anuladas no admiten cambios.
+export function mAgregarFotos(notas, notaId, nuevasFotos) {
+  const n = notas[notaId];
+  if (!n) throw new Error('Nota no encontrada');
+  if (n.estado === 'anulada') throw new Error('Una nota anulada no admite cambios');
+  n.fotos = [...(n.fotos || []), ...(nuevasFotos || [])];
+  return n.fotos.length;
+}
+
 // Anula una asentada: la marca 'anulada' y crea la nota de anulación (asentada)
 // con referencia a la anulada. La anulada permanece como constancia.
 export function mAnular(notas, targetId, motivo, notaNueva, nowISO) {

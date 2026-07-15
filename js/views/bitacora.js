@@ -13,9 +13,51 @@ import { loadObra, rread } from '../services/db.js';
 import { dateMx } from '../util/format.js';
 import {
   CLS, loadBitacora, guardarBorrador, borrarNota, setBitacoraMeta,
-  asentarNota, crearNotaAsentada, anularNota
+  asentarNota, crearNotaAsentada, anularNota, agregarFotosNota
 } from '../services/bitacora.js';
-import { comprimir, subirFoto } from '../services/bitacora-fotos.js';
+import { comprimir, subirFotoTimeout } from '../services/bitacora-fotos.js';
+
+// Sube blobs de foto a una nota YA guardada (best-effort, con timeout) y los
+// adjunta. Nunca lanza: devuelve { ok, fail } para avisar sin romper el flujo.
+// Se usa tras asentar y desde el botón "Agregar fotos" de cada nota.
+async function uploadFotosANota(notaId, blobs) {
+  const nuevas = [];
+  let fail = 0;
+  for (let i = 0; i < blobs.length; i++) {
+    const key = `${Date.now()}-${i}`;   // clave única → no pisa fotos previas
+    try { nuevas.push(await subirFotoTimeout(V.obraId, notaId, key, blobs[i])); }
+    catch (e) { fail++; console.warn('[Bitácora] foto no subida:', e); }
+  }
+  if (nuevas.length) {
+    try { await agregarFotosNota(V.obraId, notaId, nuevas); }
+    catch (e) { fail += nuevas.length; console.warn('[Bitácora] no se adjuntaron fotos:', e); return { ok: 0, fail }; }
+  }
+  return { ok: nuevas.length, fail };
+}
+
+// Abre el selector de fotos y las adjunta a una nota existente (asentada o
+// borrador). Es la vía "asentar primero, fotos después".
+async function agregarFotosFlow(n) {
+  const input = h('input', { type: 'file', accept: 'image/*', multiple: true, capture: 'environment', style: { display: 'none' } });
+  document.body.appendChild(input);
+  input.onchange = async () => {
+    const files = Array.from(input.files || []);
+    input.remove();
+    if (!files.length) return;
+    const yaTiene = (n.fotos || []).length;
+    const blobs = [];
+    for (const f of files) {
+      if (yaTiene + blobs.length >= 4) { toast('Máximo 4 fotos por nota', 'warn'); break; }
+      const b = await comprimir(f); if (b) blobs.push(b);
+    }
+    if (!blobs.length) return;
+    toast('Subiendo fotos…');
+    const r = await uploadFotosANota(n.id, blobs);
+    await reload();
+    toast(r.fail ? `${r.ok} foto(s) agregada(s), ${r.fail} fallaron — reintenta` : `${r.ok} foto(s) agregada(s)`, r.fail ? 'warn' : 'ok');
+  };
+  input.click();
+}
 
 const V = { obraId: null, obra: null, meta: null, notas: [], filtro: 'TODAS', q: '', draft: [] };
 const nid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
@@ -308,12 +350,15 @@ function notaCard(n) {
   push('Fecha de atención', n.fechaAtencion); if (n.avance != null) push('Avance físico', n.avance + ' %');
   push('Personal en obra', n.personal); push('Condiciones clima', n.clima);
 
+  const puedeFotos = n.estado !== 'anulada' && !V.meta?.cerrada && (n.fotos || []).length < 4;
   const actions = [];
   if (n.estado === 'borrador') {
     actions.push(h('button', { class: 'btn primary sm', onClick: () => asentarFlow(n) }, 'Asentar nota'));
     actions.push(h('button', { class: 'btn sm', onClick: () => openEditor(n, {}) }, 'Editar borrador'));
+    if (puedeFotos) actions.push(h('button', { class: 'btn ghost sm', onClick: () => agregarFotosFlow(n) }, '📷 Fotos'));
     actions.push(h('button', { class: 'btn danger sm', onClick: () => descartarFlow(n) }, 'Descartar'));
   } else if (n.estado === 'asentada' && !V.meta?.cerrada && n.cls !== 'APERTURA' && n.cls !== 'CIERRE') {
+    if (puedeFotos) actions.push(h('button', { class: 'btn ghost sm', title: 'Agregar evidencia fotográfica a esta nota ya asentada', onClick: () => agregarFotosFlow(n) }, '📷 Agregar fotos'));
     actions.push(h('button', { class: 'btn ghost sm', onClick: () => openEditor(null, { ref: n.folio }) }, '↳ Responder'));
     actions.push(h('button', { class: 'btn danger sm', onClick: () => anularFlow(n) }, 'Anular'));
   }
@@ -433,20 +478,15 @@ function openEditor(nota, opts) {
     busy = true;
     try {
       const notaId = isEdit ? nota.id : nid();
-      // Subida de fotos best-effort: si una falla (p.ej. reglas de Storage), NO
-      // se cae el asentado; la nota legal se guarda con las fotos que sí subieron.
-      const fotos = [...(isEdit ? (nota.fotos || []) : [])];
-      let fotoFail = 0;
-      for (let i = 0; i < V.draft.length; i++) {
-        try { fotos.push(await subirFoto(V.obraId, notaId, fotos.length, V.draft[i])); }
-        catch (e) { fotoFail++; console.warn('[Bitácora] foto no subida:', e); }
-      }
-      // Hora de reporte: se sella al primer guardado (borrador) y se conserva al
-      // asentar más tarde. Es informativa; la fecha oficial (art. 94) sigue siendo
-      // la del sistema al asentar.
+      // Las fotos YA NO se suben aquí: asentar es instantáneo y NUNCA se atora por
+      // la subida (que en obra con mala señal puede colgarse). Los blobs pendientes
+      // se suben DESPUÉS, en segundo plano y con timeout; y se pueden reintentar
+      // con el botón "Agregar fotos" de cada nota.
+      const pendientes = V.draft.slice();
+      // Hora de reporte: se sella al primer guardado y se conserva al asentar.
       const reportadoEn = (isEdit ? (nota.reportadoEn || nota.creadaEn) : null) || Date.now();
       const n = Object.assign({}, isEdit ? nota : {}, c, {
-        id: notaId, fotos, reportadoEn,
+        id: notaId, fotos: (isEdit ? (nota.fotos || []) : []), reportadoEn,
         creadaEn: (isEdit ? nota.creadaEn : null) || reportadoEn,
         emiteUid: state.user?.uid || '', emiteNombre: state.user?.displayName || state.user?.email || ''
       });
@@ -457,9 +497,17 @@ function openEditor(nota, opts) {
         await guardarBorrador(V.obraId, { ...n, estado: 'borrador', folio: n.folio || 0 });
       }
       close();
-      const okMsg = asentar ? 'Nota asentada' : 'Borrador guardado';
-      toast(fotoFail ? `${okMsg}, pero ${fotoFail} foto(s) no se subieron (revisa permisos de Storage).` : okMsg, fotoFail ? 'warn' : 'ok');
+      toast(asentar ? 'Nota asentada' : 'Borrador guardado', 'ok');
       const bit = await loadBitacora(V.obraId); V.meta = bit.meta; V.notas = bit.notas; renderLista();
+      // Sube las fotos en segundo plano (no bloquea el asentado).
+      if (pendientes.length) {
+        toast(`Subiendo ${pendientes.length} foto(s) en segundo plano…`);
+        uploadFotosANota(notaId, pendientes).then(async (r) => {
+          const b2 = await loadBitacora(V.obraId); V.notas = b2.notas;
+          try { renderLista(); } catch { /* el usuario navegó fuera de bitácora */ }
+          toast(r.fail ? `${r.ok} foto(s) subida(s), ${r.fail} fallaron — reintenta con "📷 Agregar fotos"` : `${r.ok} foto(s) subida(s)`, r.fail ? 'warn' : 'ok');
+        }).catch(() => {});
+      }
     } catch (e) { busy = false; toast('Error: ' + (e.message || e), 'danger'); }
   }
 }
