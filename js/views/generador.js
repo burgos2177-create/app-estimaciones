@@ -5,6 +5,7 @@ import { state } from '../state/store.js';
 import { navigate } from '../state/router.js';
 import { money, num, num0, dateMx } from '../util/format.js';
 import { getColumns, getCalcFn, calcGeneradorTotal, blankPartida, PLANTILLAS } from '../services/plantillas.js';
+import { pickPlantillaDialog } from './estimacion.js';
 import { initDrive, isConfigured as driveConfigured, isSignedIn as driveSignedIn, signIn as driveSignIn,
          ensureFolderPath, uploadFile, deleteFile, getImageObjectUrl, safeFilename } from '../services/drive.js';
 
@@ -65,11 +66,32 @@ export async function renderGenerador({ params }) {
     }
   }
 
+  // Cambiar la plantilla de medición del concepto (corrige una asignación errónea).
+  // Es del CONCEPTO, así que afecta todos sus generadores.
+  async function cambiarPlantilla() {
+    const gensDelConcepto = Object.values(obra.generadores || {}).filter(g => g.conceptoId === gen.conceptoId);
+    const conPartidas = gensDelConcepto.filter(g => (g.partidas || []).length > 0).length;
+    const warning = `Cambiar la plantilla afecta a TODOS los generadores de este concepto (${gensDelConcepto.length}). ` +
+      (conPartidas > 0
+        ? `${conPartidas} ya tiene(n) mediciones capturadas; al cambiar las columnas revísalas, porque algunos parciales podrían quedar en 0.`
+        : 'Ninguno tiene mediciones aún, así que el cambio es limpio.');
+    const ok = await pickPlantillaDialog(obraId, gen.conceptoId, concepto, {
+      title: 'Cambiar plantilla del concepto',
+      warning,
+      confirmLabel: 'Cambiar plantilla'
+    });
+    if (ok) {
+      toast('Plantilla actualizada', 'ok');
+      renderGenerador({ params: { id: obraId, estid: estId, gid } });
+    }
+  }
+
   // ===== Header =====
   const headerCard = h('div', { class: 'card' }, [
     h('div', { class: 'row' }, [
       h('h3', { style: { margin: 0 } }, 'Concepto'),
       h('span', { class: 'tag muted' }, PLANTILLAS[gen.plantillaTipo]?.label || 'sin plantilla'),
+      editable && h('button', { class: 'btn sm ghost', title: 'Cambiar la plantilla de medición del concepto (si te equivocaste al asignarla)', onClick: cambiarPlantilla }, '⇄ Cambiar plantilla'),
       h('div', { style: { flex: 1 } }),
       !editable && h('span', { class: 'tag ok' }, '🔒 estim. cerrada')
     ]),

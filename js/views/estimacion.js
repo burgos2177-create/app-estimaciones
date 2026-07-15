@@ -226,7 +226,7 @@ async function startNewGenerador(obraId, estId, conceptoId, concepto) {
   } catch (err) { toast('Error: ' + err.message, 'danger'); }
 }
 
-async function pickPlantillaDialog(obraId, conceptoId, concepto) {
+export async function pickPlantillaDialog(obraId, conceptoId, concepto, pickOpts = {}) {
   const opts = h('div', { style: { display: 'flex', flexDirection: 'column', gap: '8px' } });
   let chosen = null;
   let customConfig = null;
@@ -251,13 +251,14 @@ async function pickPlantillaDialog(obraId, conceptoId, concepto) {
   customBuilder.classList.add('hidden');
 
   const ok = await modal({
-    title: `Plantilla para "${concepto.descripcion?.slice(0, 60) || ''}…"`,
+    title: pickOpts.title || `Plantilla para "${concepto.descripcion?.slice(0, 60) || ''}…"`,
     body: h('div', {}, [
+      pickOpts.warning ? h('div', { class: 'card', style: { background: 'rgba(245,196,81,0.1)', borderColor: 'var(--warn)', marginBottom: '10px', fontSize: '12px', color: 'var(--text-1)' } }, pickOpts.warning) : null,
       h('p', { class: 'muted', style: { marginTop: 0, fontSize: '12px' } }, 'Esta plantilla se ligará al concepto y se usará en todos sus generadores.'),
       opts,
       customBuilder
     ]),
-    confirmLabel: 'Usar esta plantilla',
+    confirmLabel: pickOpts.confirmLabel || 'Usar esta plantilla',
     onConfirm: async () => {
       if (!chosen) { toast('Elige una plantilla', 'warn'); return false; }
       if (chosen === 'personalizado') {
