@@ -4,7 +4,7 @@
 
 import { h, modal, toast, buzonBadge } from '../util/dom.js';
 import { renderShell } from './shell.js';
-import { rread, loadObra, setPagoCliente, getObraLinks, listBuzonItems, pushBuzonItem, updateBuzonItem } from '../services/db.js';
+import { rread, loadObra, setPagoCliente, setEstimacionIvaMonto, updateObraMeta, getObraLinks, listBuzonItems, pushBuzonItem, updateBuzonItem } from '../services/db.js';
 import { state } from '../state/store.js';
 import { money, num, dateMx, pct } from '../util/format.js';
 import { buildResumenData, exportResumenPdf, exportResumenXlsx, exportEstimacionJson } from '../services/export.js';
@@ -53,7 +53,7 @@ async function draw(obraId, obra, estId) {
   const ests = obra.estimaciones || {};
   const estsArr = Object.entries(ests).map(([id, e]) => ({ id, ...e })).sort((a, b) => (a.numero || 0) - (b.numero || 0));
   const data = buildResumenData(obra, estId);
-  const { est, ivaPct, anticipoPct, rows, subtotalEsta, ivaEsta, importeEsta, avPond, importeAcumEjec, importeAcumEjecCIVA, subtotalPagado, ivaPagado, importePagado, diferencia, diferenciaPct, anticipoMontoBase, amortizacionEsta, amortizacionAcum, saldoAnticipoPorAmortizar, netoEsta, netoAcum } = data;
+  const { est, ivaPct, anticipoPct, rows, subtotalEsta, ivaEsta, ivaAcum, ivaManual, importeEsta, avPond, importeAcumEjec, importeAcumEjecCIVA, subtotalPagado, ivaPagado, importePagado, diferencia, diferenciaPct, anticipoMontoBase, amortizacionEsta, amortizacionAcum, saldoAnticipoPorAmortizar, netoEsta, netoAcum, anticipoRecibido, totalRecibidoCliente, saldoCaja } = data;
 
   const estSel = h('select', { onchange: e => { draw(obraId, obra, e.target.value); } },
     estsArr.map(es => h('option', { value: es.id, selected: es.id === estId }, `Estimación #${es.numero}`)));
@@ -98,7 +98,7 @@ async function draw(obraId, obra, estId) {
     h('tr', { style: { background: 'var(--bg-2)' } }, [
       h('td', {}, 'Acumulado ejecutado (todas)'),
       h('td', { class: 'num' }, money(importeAcumEjec)),
-      h('td', { class: 'num muted' }, money(importeAcumEjec * ivaPct)),
+      h('td', { class: 'num muted' }, money(ivaAcum)),
       h('td', { class: 'num' }, h('b', {}, money(importeAcumEjecCIVA)))
     ])
   ];
@@ -129,10 +129,20 @@ async function draw(obraId, obra, estId) {
     h('td', { class: 'num' }, h('b', {}, money(importePagado)))
   ]));
 
+  const editIvaBtn = editable
+    ? h('button', { class: 'btn sm ghost', onClick: async () => { const ok = await editIvaDialog(obraId, estId, est); if (ok) renderResumen({ params: { id: obraId } }); } }, '✎ IVA')
+    : null;
   const estadoCuenta = h('div', { class: 'card' }, [
-    h('h3', {}, 'Estado de cuenta'),
+    h('div', { class: 'row', style: { marginBottom: '10px' } }, [
+      h('h3', { style: { margin: 0 } }, 'Estado de cuenta'),
+      h('div', { style: { flex: 1 } }),
+      ivaManual
+        ? h('span', { class: 'tag ok', title: 'El IVA de esta estimación se capturó como monto manual (no 16% sobre todo)' }, `IVA manual: ${money(ivaEsta)}`)
+        : h('span', { class: 'tag muted', title: 'IVA automático (16% del subtotal). Edítalo para poner solo el IVA de materiales gravados.' }, `IVA 16% auto`),
+      editIvaBtn
+    ]),
     h('table', { class: 'tbl' }, [
-      h('thead', {}, [h('tr', {}, [h('th', {}, 'Documento'), h('th', { class: 'num' }, 'Subtotal'), h('th', { class: 'num' }, `IVA (${pct(ivaPct)})`), h('th', { class: 'num' }, 'Importe')])]),
+      h('thead', {}, [h('tr', {}, [h('th', {}, 'Documento'), h('th', { class: 'num' }, 'Subtotal'), h('th', { class: 'num' }, 'IVA'), h('th', { class: 'num' }, 'Importe')])]),
       h('tbody', {}, ecBodyRows)
     ]),
     h('div', { class: 'grid-2', style: { marginTop: '16px', paddingTop: '14px', borderTop: '1px solid var(--border)' } }, [
@@ -184,9 +194,30 @@ async function draw(obraId, obra, estId) {
     ])
   ]);
 
+  // Caja del cliente: efectivo real recibido vs lo facturado. El anticipo real
+  // (que pudo ser mayor al contractual) se captura aquí y forma parte del saldo.
+  const cajaCard = h('div', { class: 'card' }, [
+    h('div', { class: 'row', style: { marginBottom: '10px' } }, [
+      h('h3', { style: { margin: 0 } }, 'Caja del cliente'),
+      h('div', { style: { flex: 1 } }),
+      editable && h('button', { class: 'btn sm ghost', onClick: async () => { const ok = await editAnticipoRecibidoDialog(obraId, m); if (ok) renderResumen({ params: { id: obraId } }); } }, '✎ Anticipo recibido')
+    ]),
+    h('div', { class: 'grid-4' }, [
+      kvBig('Anticipo recibido', money(anticipoRecibido), ''),
+      kvBig('Pagos recibidos', money(importePagado), ''),
+      kvBig('Total recibido', money(totalRecibidoCliente), ''),
+      kvBig('Ejecutado (c/IVA)', money(importeAcumEjecCIVA), '')
+    ]),
+    h('div', { style: { marginTop: '14px', paddingTop: '12px', borderTop: '1px solid var(--border)' } }, [
+      kvBig(saldoCaja >= 0 ? 'Saldo a favor del cliente' : 'Saldo por cobrar al cliente', money(Math.abs(saldoCaja)), saldoCaja >= 0 ? 'ok' : 'warn')
+    ]),
+    h('p', { class: 'muted', style: { fontSize: '11px', marginTop: '8px' } }, 'Total recibido − ejecutado a la fecha. Positivo = el cliente ha entregado de más (p.ej. anticipo por encima del contractual); negativo = falta cobrarle.')
+  ]);
+
   const blocks = [head, sub];
   if (anticipoCard) blocks.push(anticipoCard);
   blocks.push(estadoCuenta);
+  blocks.push(cajaCard);
   blocks.push(h('h2', {}, 'Conceptos'));
   blocks.push(tablaCard);
 
@@ -200,6 +231,52 @@ function kvBig(label, val, kind) {
     h('label', {}, label),
     h('div', { class: 'mono', style: { fontSize: '20px', fontWeight: 600, color } }, val)
   ]);
+}
+
+// IVA manual (monto) de una estimación. Vacío/automático = 16% del subtotal.
+async function editIvaDialog(obraId, estId, est) {
+  const cur = est.ivaMonto;
+  const esManual = cur != null && cur !== '';
+  const rAuto = h('input', { type: 'radio', name: 'iva-modo', checked: !esManual });
+  const rManual = h('input', { type: 'radio', name: 'iva-modo', checked: esManual });
+  const montoIn = h('input', { type: 'number', step: '0.01', value: esManual ? cur : '', placeholder: '0.00', style: { marginLeft: '8px', width: '160px' } });
+  montoIn.addEventListener('focus', () => { rManual.checked = true; });
+  return await modal({
+    title: `IVA — Estimación #${est.numero}`,
+    body: h('div', {}, [
+      h('p', { class: 'muted', style: { fontSize: '12px', marginTop: 0 } }, 'Usa monto manual cuando solo algunos materiales causan IVA (no el 16% sobre todo). El cálculo detallado será otro módulo; aquí lo ajustas al monto.'),
+      h('label', { class: 'row', style: { padding: '4px 0' } }, [rAuto, h('span', {}, `Automático — 16% del subtotal`)]),
+      h('label', { class: 'row', style: { padding: '4px 0' } }, [rManual, h('span', {}, 'Monto manual:'), montoIn])
+    ]),
+    confirmLabel: 'Guardar',
+    onConfirm: async () => {
+      try {
+        await setEstimacionIvaMonto(obraId, estId, rManual.checked ? (Number(montoIn.value) || 0) : null);
+        toast('IVA actualizado', 'ok');
+        return true;
+      } catch (err) { toast('Error: ' + err.message, 'danger'); return false; }
+    }
+  });
+}
+
+// Anticipo REAL recibido del cliente (puede diferir del contractual).
+async function editAnticipoRecibidoDialog(obraId, m) {
+  const inp = h('input', { type: 'number', step: '0.01', value: m.anticipoRecibido ?? '', placeholder: '0.00' });
+  return await modal({
+    title: 'Anticipo recibido (real)',
+    body: h('div', {}, [
+      h('p', { class: 'muted', style: { fontSize: '12px', marginTop: 0 } }, 'El monto de anticipo que el cliente realmente depositó. Alimenta la caja; la amortización sigue el anticipo contractual, y el excedente aparece como saldo a favor.'),
+      h('div', { class: 'field' }, [h('label', {}, 'Monto recibido'), inp])
+    ]),
+    confirmLabel: 'Guardar',
+    onConfirm: async () => {
+      try {
+        await updateObraMeta(obraId, { anticipoRecibido: Number(inp.value) || 0 });
+        toast('Anticipo recibido actualizado', 'ok');
+        return true;
+      } catch (err) { toast('Error: ' + err.message, 'danger'); return false; }
+    }
+  });
 }
 
 function crumbs(obraId, nombre) {
@@ -258,8 +335,11 @@ async function editPagoDialog(obraId, estId, est, ivaPct) {
 
   function syncFromSubtotal() {
     const s = Number(subtotalIn.value) || 0;
-    ivaIn.value = (s * ivaPct).toFixed(2);
-    importeIn.value = (s * (1 + ivaPct)).toFixed(2);
+    // Si la estimación tiene IVA manual, el pago default usa ese monto fijo.
+    const ivaFijo = (est.ivaMonto != null && est.ivaMonto !== '') ? Number(est.ivaMonto) : null;
+    const iva = ivaFijo != null ? ivaFijo : s * ivaPct;
+    ivaIn.value = iva.toFixed(2);
+    importeIn.value = (s + iva).toFixed(2);
   }
   function syncFromImporte() {
     const i = Number(importeIn.value) || 0;

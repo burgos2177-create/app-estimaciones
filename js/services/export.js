@@ -387,11 +387,26 @@ export function buildResumenData(obra, estId) {
     return { c, totalAcum, enEsta, aCobrarEsta, aCobrarAcum, restante, pctAv, pctPpto, pctPond };
   });
 
-  const ivaEsta = subtotalEsta * ivaPct;
+  // Subtotal ejecutado POR estimación (para IVA manual por estimación).
+  const subtotalPorEstim = {};
+  for (const c of conceptos) {
+    const ejec = ejecMap[c.id] || {};
+    const pu = c.precio_unitario || 0;
+    for (const eid in ejec) subtotalPorEstim[eid] = (subtotalPorEstim[eid] || 0) + ejec[eid] * pu;
+  }
+  // IVA de una estimación: monto MANUAL si se capturó (est.ivaMonto); si no, 16%
+  // sobre su subtotal. Así solo se cobra el IVA de los materiales que lo causan.
+  const ivaDeEstim = (eid) => {
+    const e = obra.estimaciones?.[eid];
+    return (e && e.ivaMonto != null && e.ivaMonto !== '') ? (Number(e.ivaMonto) || 0) : (subtotalPorEstim[eid] || 0) * ivaPct;
+  };
+  const ivaManual = est.ivaMonto != null && est.ivaMonto !== '';
+  const ivaEsta = ivaDeEstim(estId);
   const importeEstaBruto = subtotalEsta + ivaEsta;
 
   const importeAcumEjec = rows.reduce((s, r) => s + r.aCobrarAcum, 0);
-  const importeAcumEjecCIVA = importeAcumEjec * (1 + ivaPct);
+  const ivaAcum = Object.keys(obra.estimaciones || {}).reduce((s, eid) => s + ivaDeEstim(eid), 0);
+  const importeAcumEjecCIVA = importeAcumEjec + ivaAcum;
 
   // Amortización de anticipo (modelo estándar Mx: amortiza % del subtotal sin IVA)
   // El anticipo otorgado se calcula sobre el SUBTOTAL DEL CONTRATO (monto C/IVA / (1+IVA)),
@@ -422,9 +437,16 @@ export function buildResumenData(obra, estId) {
     }
   }
 
+  // Caja del cliente: efectivo REAL recibido (anticipo real + pagos) vs lo
+  // ejecutado/facturado a la fecha (c/IVA). Saldo + = a favor del cliente (dio
+  // de más, p.ej. anticipo por encima del contractual); − = por cobrar.
+  const anticipoRecibido = Number(m.anticipoRecibido) || 0;
+  const totalRecibidoCliente = anticipoRecibido + importePagado;
+  const saldoCaja = totalRecibidoCliente - importeAcumEjecCIVA;
+
   return {
     m, est, ivaPct, anticipoPct, rows, totalPpto, estims,
-    subtotalEsta, ivaEsta, importeEsta: importeEstaBruto,
+    subtotalEsta, ivaEsta, ivaAcum, ivaManual, importeEsta: importeEstaBruto,
     avPond, importeAcumEjec, importeAcumEjecCIVA,
     anticipoMontoBase, anticipoMontoCIVA, anticipoTotal,
     amortizacionEsta, amortizacionAcum, saldoAnticipoPorAmortizar,
@@ -432,7 +454,8 @@ export function buildResumenData(obra, estId) {
     pagoCliente: est.pagoCliente || null,
     diferencia: netoAcum - importePagado,
     diferenciaPct: netoAcum ? (netoAcum - importePagado) / netoAcum : 0,
-    subtotalPagado, ivaPagado, importePagado
+    subtotalPagado, ivaPagado, importePagado,
+    anticipoRecibido, totalRecibidoCliente, saldoCaja
   };
 }
 
@@ -550,7 +573,7 @@ function applyPrintFilter(rows, cfg) {
 export function exportResumenXlsx(obra, estId, cfg = {}) {
   cfg = { ...DEFAULT_PRINT_CFG, ...cfg };
   const data = buildResumenData(obra, estId);
-  const { m, est, ivaPct, anticipoPct, subtotalEsta, ivaEsta, importeEsta, avPond, diferencia, diferenciaPct, importeAcumEjec, importeAcumEjecCIVA, subtotalPagado, ivaPagado, importePagado, anticipoMontoBase, anticipoTotal, amortizacionEsta, amortizacionAcum, saldoAnticipoPorAmortizar, netoEsta, netoAcum } = data;
+  const { m, est, ivaPct, anticipoPct, subtotalEsta, ivaEsta, importeEsta, avPond, diferencia, diferenciaPct, importeAcumEjec, importeAcumEjecCIVA, subtotalPagado, ivaPagado, importePagado, ivaAcum, anticipoMontoBase, anticipoTotal, amortizacionEsta, amortizacionAcum, saldoAnticipoPorAmortizar, netoEsta, netoAcum } = data;
   const rows = applyPrintFilter(data.rows, cfg);
   const titulo = cfg.modo === 'estadoCuenta' ? 'ESTADO DE CUENTA' : 'RESUMEN DE ESTIMACIÓN';
 
@@ -602,7 +625,7 @@ export function exportResumenXlsx(obra, estId, cfg = {}) {
     aoa.push(['ESTADO DE CUENTA']);
     aoa.push(['Documento', 'Subtotal', 'IVA (' + (ivaPct * 100).toFixed(2) + '%)', 'Importe']);
     aoa.push(['Estimación #' + est.numero + ' (esta)', subtotalEsta, ivaEsta, importeEsta]);
-    aoa.push(['Acumulado ejecutado (todas)', importeAcumEjec, importeAcumEjec * ivaPct, importeAcumEjecCIVA]);
+    aoa.push(['Acumulado ejecutado (todas)', importeAcumEjec, ivaAcum, importeAcumEjecCIVA]);
     if (cfg.mostrarAmortizacion && anticipoPct > 0) {
       aoa.push([`Amortización anticipo (esta) — ${(anticipoPct * 100).toFixed(2)}%`, '', '', -amortizacionEsta]);
       aoa.push(['Amortización anticipo (acumulada)', '', '', -amortizacionAcum]);
@@ -659,7 +682,7 @@ export function exportResumenXlsx(obra, estId, cfg = {}) {
 export async function exportResumenPdf(obra, estId, cfg = {}) {
   cfg = { ...DEFAULT_PRINT_CFG, ...cfg };
   const data = buildResumenData(obra, estId);
-  const { m, est, ivaPct, anticipoPct, subtotalEsta, ivaEsta, importeEsta, avPond, diferencia, diferenciaPct, importeAcumEjec, importeAcumEjecCIVA, subtotalPagado, ivaPagado, importePagado, anticipoMontoBase, anticipoTotal, amortizacionEsta, amortizacionAcum, saldoAnticipoPorAmortizar, netoEsta, netoAcum } = data;
+  const { m, est, ivaPct, anticipoPct, subtotalEsta, ivaEsta, importeEsta, avPond, diferencia, diferenciaPct, importeAcumEjec, importeAcumEjecCIVA, subtotalPagado, ivaPagado, importePagado, ivaAcum, anticipoMontoBase, anticipoTotal, amortizacionEsta, amortizacionAcum, saldoAnticipoPorAmortizar, netoEsta, netoAcum } = data;
   const rows = applyPrintFilter(data.rows, cfg);
   const isEstadoCuenta = cfg.modo === 'estadoCuenta';
 
@@ -739,7 +762,7 @@ export async function exportResumenPdf(obra, estId, cfg = {}) {
 
     const ecBody = [
       [`Estimación #${est.numero} (esta)`, money(subtotalEsta), money(ivaEsta), money(importeEsta)],
-      ['Acumulado ejecutado (todas)', money(importeAcumEjec), money(importeAcumEjec * ivaPct), money(importeAcumEjecCIVA)]
+      ['Acumulado ejecutado (todas)', money(importeAcumEjec), money(ivaAcum), money(importeAcumEjecCIVA)]
     ];
     if (cfg.mostrarAmortizacion && anticipoPct > 0) {
       ecBody.push([`Amortización anticipo esta (${(anticipoPct * 100).toFixed(2)}%)`, '—', '—', { content: '-' + money(amortizacionEsta), styles: { textColor: [180, 70, 60] } }]);

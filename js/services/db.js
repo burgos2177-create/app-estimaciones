@@ -550,6 +550,13 @@ export async function setPagoCliente(obraId, estimId, pago) {
   await set(_ref(`obras/${obraId}/estimaciones/${estimId}/pagoCliente`), pago);
 }
 
+// IVA manual (monto) de una estimación. Si es null/'' se borra → vuelve al 16%.
+export async function setEstimacionIvaMonto(obraId, estimId, ivaMonto) {
+  const path = `obras/${obraId}/estimaciones/${estimId}/ivaMonto`;
+  if (ivaMonto == null || ivaMonto === '') await remove(_ref(path));
+  else await set(_ref(path), Number(ivaMonto) || 0);
+}
+
 // === Subcontratos ===
 export async function createSubcontrato(obraId, data) {
   const r = push(_ref(`obras/${obraId}/subcontratos`));
