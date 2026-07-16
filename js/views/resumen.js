@@ -53,7 +53,7 @@ async function draw(obraId, obra, estId) {
   const ests = obra.estimaciones || {};
   const estsArr = Object.entries(ests).map(([id, e]) => ({ id, ...e })).sort((a, b) => (a.numero || 0) - (b.numero || 0));
   const data = buildResumenData(obra, estId);
-  const { est, ivaPct, anticipoPct, rows, subtotalEsta, ivaEsta, ivaAcum, ivaManual, importeEsta, avPond, importeAcumEjec, importeAcumEjecCIVA, subtotalPagado, ivaPagado, importePagado, diferencia, diferenciaPct, anticipoMontoBase, amortizacionEsta, amortizacionAcum, saldoAnticipoPorAmortizar, netoEsta, netoAcum, anticipoRecibido, totalRecibidoCliente, saldoCaja } = data;
+  const { est, ivaPct, anticipoPct, rows, subtotalEsta, ivaEsta, ivaAcum, ivaManual, importeEsta, avPond, importeAcumEjec, importeAcumEjecCIVA, subtotalPagado, ivaPagado, importePagado, diferencia, diferenciaPct, anticipoMontoBase, amortizacionEsta, amortizacionAcum, saldoAnticipoPorAmortizar, netoEsta, netoAcum, anticipoRecibido, totalRecibidoCliente, saldoCaja, excesoAnticipo, abonosCliente } = data;
 
   const estSel = h('select', { onchange: e => { draw(obraId, obra, e.target.value); } },
     estsArr.map(es => h('option', { value: es.id, selected: es.id === estId }, `Estimación #${es.numero}`)));
@@ -123,10 +123,15 @@ async function draw(obraId, obra, estId) {
     ]));
   }
   ecBodyRows.push(h('tr', {}, [
-    h('td', {}, ['Pagos cliente (acumulado) ', editPagosBtn, badge]),
+    h('td', {}, ['Pagos cliente (acumulado) ', editPagosBtn, badge,
+      excesoAnticipo ? h('div', { class: 'muted', style: { fontSize: '11px', marginTop: '2px' } },
+        excesoAnticipo > 0
+          ? `incluye ${money(excesoAnticipo)} de anticipo excedente (a favor)`
+          : `descuenta ${money(-excesoAnticipo)} de anticipo faltante`) : null
+    ]),
     h('td', { class: 'num' }, money(subtotalPagado)),
     h('td', { class: 'num muted' }, money(ivaPagado)),
-    h('td', { class: 'num' }, h('b', {}, money(importePagado)))
+    h('td', { class: 'num' }, h('b', {}, money(abonosCliente)))
   ]));
 
   const editIvaBtn = editable
