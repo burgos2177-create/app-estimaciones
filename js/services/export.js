@@ -7,6 +7,7 @@
 
 import { calcGeneradorTotal, getColumns, calcPartidaTotal } from './plantillas.js';
 import { amortRateOnSubtotal } from './contrato.js';
+import { SOGRUB_LOGO, SOGRUB_LOGO_RATIO, BRAND } from '../config/brand.js';
 import { getImageObjectUrl, isSignedIn as driveSignedIn } from './drive.js';
 
 const fmtMxn = new Intl.NumberFormat('es-MX', { style: 'currency', currency: 'MXN', minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -579,7 +580,7 @@ function applyPrintFilter(rows, cfg) {
 export function exportResumenXlsx(obra, estId, cfg = {}) {
   cfg = { ...DEFAULT_PRINT_CFG, ...cfg };
   const data = buildResumenData(obra, estId);
-  const { m, est, ivaPct, anticipoPct, subtotalEsta, ivaEsta, importeEsta, avPond, diferencia, diferenciaPct, importeAcumEjec, importeAcumEjecCIVA, subtotalPagado, ivaPagado, importePagado, abonosCliente, ivaAcum, anticipoMontoBase, anticipoTotal, amortizacionEsta, amortizacionAcum, saldoAnticipoPorAmortizar, netoEsta, netoAcum } = data;
+  const { m, est, ivaPct, anticipoPct, subtotalEsta, ivaEsta, importeEsta, avPond, diferencia, diferenciaPct, importeAcumEjec, importeAcumEjecCIVA, subtotalPagado, ivaPagado, importePagado, abonosCliente, ivaAcum, anticipoMontoBase, anticipoTotal, amortizacionEsta, amortizacionAcum, saldoAnticipoPorAmortizar, netoEsta, netoAcum, anticipoRecibido, totalRecibidoCliente, saldoCaja } = data;
   const rows = applyPrintFilter(data.rows, cfg);
   const titulo = cfg.modo === 'estadoCuenta' ? 'ESTADO DE CUENTA' : 'RESUMEN DE ESTIMACIÓN';
 
@@ -647,6 +648,13 @@ export function exportResumenXlsx(obra, estId, cfg = {}) {
       aoa.push([`Anticipo total otorgado (${(anticipoPct * 100).toFixed(2)}%)`, '', '', anticipoTotal]);
       aoa.push(['Saldo de anticipo por amortizar', '', '', saldoAnticipoPorAmortizar]);
     }
+    aoa.push([]);
+    aoa.push(['CAJA DEL CLIENTE']);
+    aoa.push(['Anticipo recibido (real)', '', '', anticipoRecibido]);
+    aoa.push(['Pagos de estimaciones recibidos', '', '', importePagado]);
+    aoa.push(['Total recibido del cliente', '', '', totalRecibidoCliente]);
+    aoa.push(['Ejecutado a la fecha (c/IVA)', '', '', importeAcumEjecCIVA]);
+    aoa.push([saldoCaja >= 0 ? 'Saldo a favor del cliente' : 'Saldo por cobrar al cliente', '', '', saldoCaja]);
   }
 
   if (cfg.notas && cfg.notas.trim()) {
@@ -688,7 +696,7 @@ export function exportResumenXlsx(obra, estId, cfg = {}) {
 export async function exportResumenPdf(obra, estId, cfg = {}) {
   cfg = { ...DEFAULT_PRINT_CFG, ...cfg };
   const data = buildResumenData(obra, estId);
-  const { m, est, ivaPct, anticipoPct, subtotalEsta, ivaEsta, importeEsta, avPond, diferencia, diferenciaPct, importeAcumEjec, importeAcumEjecCIVA, subtotalPagado, ivaPagado, importePagado, abonosCliente, ivaAcum, anticipoMontoBase, anticipoTotal, amortizacionEsta, amortizacionAcum, saldoAnticipoPorAmortizar, netoEsta, netoAcum } = data;
+  const { m, est, ivaPct, anticipoPct, subtotalEsta, ivaEsta, importeEsta, avPond, diferencia, diferenciaPct, importeAcumEjec, importeAcumEjecCIVA, subtotalPagado, ivaPagado, importePagado, abonosCliente, ivaAcum, anticipoMontoBase, anticipoTotal, amortizacionEsta, amortizacionAcum, saldoAnticipoPorAmortizar, netoEsta, netoAcum, anticipoRecibido, totalRecibidoCliente, saldoCaja } = data;
   const rows = applyPrintFilter(data.rows, cfg);
   const isEstadoCuenta = cfg.modo === 'estadoCuenta';
 
@@ -808,6 +816,33 @@ export async function exportResumenPdf(obra, estId, cfg = {}) {
     doc.setTextColor(diferencia >= 0 ? 200 : 25, diferencia >= 0 ? 60 : 100, 60);
     doc.setFontSize(13);
     doc.text(`${money(diferencia)}  (${fmtPct(diferenciaPct)})`, doc.internal.pageSize.width - 40, yy + lh * 2, { align: 'right' });
+
+    // ===== Caja del cliente =====
+    let cy = yy + lh * 2 + 18;
+    if (cy > 610) { doc.addPage(); cy = 90; }
+    const wpg = doc.internal.pageSize.width;
+    doc.setFillColor(247, 249, 252); doc.rect(30, cy, wpg - 60, 18, 'F');
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(10); doc.setTextColor(30);
+    doc.text('CAJA DEL CLIENTE', 38, cy + 13);
+    const cajaBody = [
+      ['Anticipo recibido (real)', money(anticipoRecibido)],
+      ['Pagos de estimaciones recibidos', money(importePagado)],
+      [{ content: 'Total recibido del cliente', styles: { fontStyle: 'bold' } }, { content: money(totalRecibidoCliente), styles: { fontStyle: 'bold' } }],
+      ['Ejecutado a la fecha (c/IVA)', money(importeAcumEjecCIVA)],
+      [{ content: saldoCaja >= 0 ? 'Saldo a favor del cliente' : 'Saldo por cobrar al cliente', styles: { fontStyle: 'bold' } },
+       { content: money(Math.abs(saldoCaja)), styles: { fontStyle: 'bold', textColor: saldoCaja >= 0 ? [30, 140, 90] : [180, 70, 60] } }]
+    ];
+    doc.autoTable({
+      startY: cy + 22,
+      body: cajaBody,
+      theme: 'plain',
+      styles: { font: 'helvetica', fontSize: 9, cellPadding: 4 },
+      columnStyles: { 0: { textColor: 60 }, 1: { halign: 'right' } },
+      margin: { left: 30, right: 30 }
+    });
+    doc.setFontSize(7.5); doc.setTextColor(130);
+    doc.text('Total recibido − ejecutado a la fecha. Positivo = el cliente ha entregado de más (p.ej. anticipo por encima del contractual).',
+      30, doc.lastAutoTable.finalY + 10);
   }
 
   if (cfg.notas && cfg.notas.trim()) {
@@ -980,47 +1015,49 @@ function drawObraHeaderLite(doc, m, titulo) {
 
 function drawObraHeader(doc, m, titulo) {
   const w = doc.internal.pageSize.width;
+  const [nR, nG, nB] = BRAND.navy;
+  const [cR, cG, cB] = BRAND.cyan;
 
-  // Barra de título
-  doc.setFillColor(40, 50, 65); doc.rect(0, 0, w, 70, 'F');
-  doc.setFont('helvetica', 'bold'); doc.setFontSize(15); doc.setTextColor(230);
-  doc.text(titulo, 30, 32);
-  doc.setFont('helvetica', 'normal'); doc.setFontSize(9); doc.setTextColor(180);
-  const nombreLines = doc.splitTextToSize(m.nombre || '—', w - 240);
-  doc.text(nombreLines.slice(0, 1), 30, 50);
-  doc.setFontSize(8); doc.setTextColor(150);
-  doc.text(`Generado ${new Date().toLocaleString('es-MX')}`, w - 30, 32, { align: 'right' });
+  // Logo SOGRUB (arriba-izquierda). Si por lo que sea no carga, sigue sin romper.
+  try {
+    const lh = 42, lw = lh * SOGRUB_LOGO_RATIO;
+    doc.addImage(SOGRUB_LOGO, 'PNG', 28, 14, lw, lh);
+  } catch (e) { /* logo opcional */ }
+
+  // Título del documento + fecha (derecha)
+  doc.setFont('helvetica', 'bold'); doc.setFontSize(15); doc.setTextColor(nR, nG, nB);
+  doc.text(titulo, w - 30, 32, { align: 'right' });
+  doc.setFont('helvetica', 'normal'); doc.setFontSize(8); doc.setTextColor(120);
+  doc.text(`Generado ${new Date().toLocaleString('es-MX')}`, w - 30, 46, { align: 'right' });
+
+  // Nombre de la obra + regla de acento
+  doc.setFont('helvetica', 'bold'); doc.setFontSize(11); doc.setTextColor(nR, nG, nB);
+  doc.text(doc.splitTextToSize(m.nombre || '—', w - 220).slice(0, 1), 28, 74);
+  doc.setDrawColor(cR, cG, cB); doc.setLineWidth(1.6); doc.line(28, 82, w - 30, 82); doc.setLineWidth(0.2);
 
   // Banda de datos en grid 4×2
-  doc.setFillColor(248, 250, 252); doc.rect(0, 70, w, 75, 'F');
-  doc.setTextColor(60); doc.setFontSize(8.5);
+  doc.setFillColor(247, 249, 252); doc.rect(0, 88, w, 66, 'F');
 
   const marginX = 30;
-  const cols = 4;
-  const colW = (w - marginX * 2) / cols;
+  const colW = (w - marginX * 2) / 4;
   const xs = [0, 1, 2, 3].map(i => marginX + i * colW);
-  const ys = [90, 124];
-
+  const ys = [106, 132];
+  doc.setFontSize(8.5);
   const cell = (label, val, ix, iy) => {
     const x = xs[ix], y = ys[iy];
-    doc.setFont('helvetica', 'bold'); doc.setTextColor(95);
+    doc.setFont('helvetica', 'bold'); doc.setTextColor(110);
     doc.text(label, x, y);
     doc.setFont('helvetica', 'normal'); doc.setTextColor(35);
-    const lines = doc.splitTextToSize(String(val || '—'), colW - 8);
-    doc.text(lines.slice(0, 1), x, y + 12);
+    doc.text(doc.splitTextToSize(String(val || '—'), colW - 8).slice(0, 1), x, y + 12);
   };
-
-  // Fila 1
   cell('Contrato No.', m.contratoNo, 0, 0);
   cell('Cliente', m.cliente, 1, 0);
   cell('Construye', m.construye, 2, 0);
   cell('Programa', m.programa, 3, 0);
-
-  // Fila 2
   cell('Ubicación', `${m.ubicacion || ''}${m.municipio ? ', ' + m.municipio : ''}`, 0, 1);
   cell('Inicio', dateStr(m.fechaInicio), 1, 1);
   cell('Fin', dateStr(m.fechaFin), 2, 1);
-  cell('Monto C/IVA', money(m.montoContratoCIVA), 3, 1);
+  cell('Monto contrato C/IVA', money(m.montoContratoCIVA), 3, 1);
 }
 
 function drawFooter(doc, data, m) {
