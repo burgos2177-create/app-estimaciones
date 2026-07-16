@@ -513,9 +513,10 @@ function collectAttachments(obra, estId) {
 
 // Anexa secciones de croquis/fotos al PDF. Solo si el usuario está conectado a Drive.
 async function appendAnexoFotos(doc, obra, estId, m) {
-  if (!driveSignedIn()) return false;
+  if (!driveSignedIn()) return { added: false, count: 0, reason: 'no-drive' };
   const groups = collectAttachments(obra, estId);
-  if (groups.size === 0) return false;
+  if (groups.size === 0) return { added: false, count: 0, reason: 'empty' };
+  const total = [...groups.values()].reduce((s, g) => s + g.items.length, 0);
 
   const w = doc.internal.pageSize.width;
   const h = doc.internal.pageSize.height;
@@ -567,7 +568,7 @@ async function appendAnexoFotos(doc, obra, estId, m) {
     y += 10;
   }
 
-  return true;
+  return { added: true, count: total, reason: null };
 }
 
 function applyPrintFilter(rows, cfg) {
@@ -862,13 +863,15 @@ export async function exportResumenPdf(obra, estId, cfg = {}) {
   }
 
   // Anexo de croquis y fotos (opcional)
+  let anexo = null;
   if (cfg.incluirAnexoFotos) {
-    try { await appendAnexoFotos(doc, obra, estId, m); }
-    catch (err) { console.error('No se pudo anexar fotos:', err); }
+    try { anexo = await appendAnexoFotos(doc, obra, estId, m); }
+    catch (err) { console.error('No se pudo anexar fotos:', err); anexo = { added: false, count: 0, reason: 'error' }; }
   }
 
   const fname = (isEstadoCuenta ? 'EstadoCuenta' : 'RESUMEN') + '_' + safeName(m.nombre) + '_Est' + est.numero + '.pdf';
   doc.save(fname);
+  return { anexo };
 }
 
 // PDF EJECUTIVO DE LA ESTIMACIÓN (un clic). Documento autocontenido para

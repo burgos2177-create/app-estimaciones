@@ -9,6 +9,7 @@ import { state } from '../state/store.js';
 import { money, num, dateMx, pct } from '../util/format.js';
 import { buildResumenData, exportResumenPdf, exportResumenXlsx, exportEstimacionJson } from '../services/export.js';
 import { amortRateOnSubtotal } from '../services/contrato.js';
+import { initDrive, isConfigured as driveConfigured, isSignedIn as driveSignedIn, signIn as driveSignIn } from '../services/drive.js';
 
 export async function renderResumen({ params }) {
   const obraId = params.id;
@@ -523,10 +524,25 @@ async function printConfigDialog(obra, estId, formato) {
         incluirAnexoFotos: incluirAnexo.checked,
         notas: notas.value || ''
       };
+      // Si pidió el anexo y Drive no está conectado, intenta conectarlo ahora
+      // (el clic de "Generar" es un gesto de usuario válido para abrir el OAuth).
+      if (formato === 'pdf' && cfg.incluirAnexoFotos && !driveSignedIn()) {
+        if (!driveConfigured()) {
+          toast('Google Drive no está configurado; el PDF se generará sin el anexo.', 'warn');
+          cfg.incluirAnexoFotos = false;
+        } else {
+          try { await initDrive(); await driveSignIn(); }
+          catch (e) { toast('No se conectó a Drive; el PDF se generará sin el anexo.', 'warn'); cfg.incluirAnexoFotos = false; }
+        }
+      }
       try {
-        if (formato === 'pdf') await exportResumenPdf(obra, estId, cfg);
-        else exportResumenXlsx(obra, estId, cfg);
-        toast('Reporte generado', 'ok');
+        if (formato !== 'pdf') { exportResumenXlsx(obra, estId, cfg); toast('Reporte generado', 'ok'); return true; }
+        const res = await exportResumenPdf(obra, estId, cfg);
+        const a = cfg.incluirAnexoFotos ? res?.anexo : null;
+        if (a?.added) toast(`PDF generado con ${a.count} imagen(es) en el anexo`, 'ok');
+        else if (a?.reason === 'empty') toast('PDF generado, pero esta estimación no tiene croquis/fotos (súbelos en el generador → “Croquis/Fotos del sitio”).', 'warn');
+        else if (a?.reason === 'no-drive') toast('PDF generado sin anexo (Drive no conectado).', 'warn');
+        else toast('Reporte generado', 'ok');
         return true;
       } catch (err) {
         console.error(err);
