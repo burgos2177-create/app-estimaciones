@@ -1,6 +1,6 @@
 import { h, modal, toast } from '../util/dom.js';
 import { renderShell } from './shell.js';
-import { loadObra, getConceptoById, resolveConceptoKeyLocal, createGenerador, setAvance } from '../services/db.js';
+import { loadObra, getConceptoById, resolveConceptoKeyLocal, createGenerador, setAvance, deleteGenerador } from '../services/db.js';
 import { state } from '../state/store.js';
 import { navigate } from '../state/router.js';
 import { money, dateMx, num, num0, pct } from '../util/format.js';
@@ -28,6 +28,22 @@ export async function renderEstimacion({ params }) {
     .filter(([_, g]) => g.estimacionId === estId)
     .sort((a, b) => (a[1].numero || 0) - (b[1].numero || 0));
 
+  async function borrarGeneradorFlow(gid, numero, c) {
+    const ok = await modal({
+      title: 'Borrar generador', danger: true, confirmLabel: 'Borrar',
+      body: h('div', {}, [
+        h('p', {}, `Se borrará el generador #${numero}${c?.clave ? ' (' + c.clave + ')' : ''} y sus mediciones.`),
+        h('p', { class: 'muted', style: { fontSize: '12px' } }, 'Los generadores siguientes de esta estimación se renumeran automáticamente (sin huecos).')
+      ])
+    });
+    if (!ok) return;
+    try {
+      await deleteGenerador(obraId, gid);
+      toast('Generador borrado', 'ok');
+      renderEstimacion({ params: { id: obraId, estid: estId } });
+    } catch (err) { toast('Error: ' + err.message, 'danger'); }
+  }
+
   // Subtotal calculado
   let subtotal = 0;
   const generadoresRows = gensInEstim.map(([gid, g]) => {
@@ -48,7 +64,15 @@ export async function renderEstimacion({ params }) {
       h('td', { class: 'num' }, num(cant, 2)),
       h('td', { class: 'num muted' }, money(c?.precio_unitario)),
       h('td', { class: 'num' }, h('b', {}, money(importe))),
-      h('td', {}, overrun ? h('span', { class: 'tag warn' }, '⚠ sobreejec.') : h('span', { class: 'tag muted' }, PLANTILLAS[g.plantillaTipo]?.label || '—'))
+      h('td', { style: { whiteSpace: 'nowrap' } }, [
+        overrun ? h('span', { class: 'tag warn' }, '⚠ sobreejec.') : h('span', { class: 'tag muted' }, PLANTILLAS[g.plantillaTipo]?.label || '—'),
+        editable && h('button', {
+          class: 'btn sm danger ghost',
+          style: { marginLeft: '6px' },
+          title: 'Borrar este generador (los siguientes se renumeran)',
+          onClick: (e) => { e.stopPropagation(); borrarGeneradorFlow(gid, g.numero, c); }
+        }, '🗑')
+      ])
     ]);
   });
 

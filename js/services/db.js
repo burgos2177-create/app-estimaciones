@@ -474,6 +474,23 @@ export async function createGenerador(obraId, data) {
 export async function saveGenerador(obraId, gid, data) {
   await update(_ref(`obras/${obraId}/generadores/${gid}`), { ...data, updatedAt: Date.now() });
 }
+
+// Borra un generador y RENUMERA los restantes de la misma estimación a 1..N
+// (sin huecos), respetando su orden actual. Devuelve el estimacionId afectado.
+export async function deleteGenerador(obraId, gid) {
+  const all = await rread(`obras/${obraId}/generadores`) || {};
+  const target = all[gid];
+  if (!target) return null;
+  const estimacionId = target.estimacionId;
+  await remove(_ref(`obras/${obraId}/generadores/${gid}`));
+  const restantes = Object.entries(all)
+    .filter(([id, g]) => id !== gid && g.estimacionId === estimacionId)
+    .sort((a, b) => (a[1].numero || 0) - (b[1].numero || 0) || (a[1].createdAt || 0) - (b[1].createdAt || 0));
+  const updates = {};
+  restantes.forEach(([id, g], i) => { if ((g.numero || 0) !== i + 1) updates[`${id}/numero`] = i + 1; });
+  if (Object.keys(updates).length) await update(_ref(`obras/${obraId}/generadores`), updates);
+  return estimacionId;
+}
 export async function setAvance(obraId, conceptoId, estimacionId, cantidad) {
   await set(_ref(`obras/${obraId}/avances/${conceptoId}/${estimacionId}`), Number(cantidad) || 0);
 }

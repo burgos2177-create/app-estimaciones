@@ -1,6 +1,6 @@
 import { h, mount, toast, modal } from '../util/dom.js';
 import { renderShell } from './shell.js';
-import { loadObra, getConceptoById, saveGenerador, addGeneradorAttachment, removeGeneradorAttachment } from '../services/db.js';
+import { loadObra, getConceptoById, saveGenerador, addGeneradorAttachment, removeGeneradorAttachment, deleteGenerador } from '../services/db.js';
 import { state } from '../state/store.js';
 import { navigate } from '../state/router.js';
 import { money, num, num0, dateMx } from '../util/format.js';
@@ -86,6 +86,23 @@ export async function renderGenerador({ params }) {
     }
   }
 
+  // Borra este generador (puesto por error) y renumera los demás de la estimación.
+  async function borrarGeneradorFlow() {
+    const ok = await modal({
+      title: 'Borrar generador', danger: true, confirmLabel: 'Borrar',
+      body: h('div', {}, [
+        h('p', {}, `Se borrará el generador #${gen.numero}${concepto?.clave ? ' (' + concepto.clave + ')' : ''} y sus mediciones.`),
+        h('p', { class: 'muted', style: { fontSize: '12px' } }, 'Los generadores siguientes de esta estimación se renumeran automáticamente (sin huecos).')
+      ])
+    });
+    if (!ok) return;
+    try {
+      await deleteGenerador(obraId, gid);
+      toast('Generador borrado', 'ok');
+      navigate(`/obras/${obraId}/estimaciones/${estId}`);
+    } catch (err) { toast('Error: ' + err.message, 'danger'); }
+  }
+
   // ===== Header =====
   const headerCard = h('div', { class: 'card' }, [
     h('div', { class: 'row' }, [
@@ -93,6 +110,7 @@ export async function renderGenerador({ params }) {
       h('span', { class: 'tag muted' }, PLANTILLAS[gen.plantillaTipo]?.label || 'sin plantilla'),
       editable && h('button', { class: 'btn sm ghost', title: 'Cambiar la plantilla de medición del concepto (si te equivocaste al asignarla)', onClick: cambiarPlantilla }, '⇄ Cambiar plantilla'),
       h('div', { style: { flex: 1 } }),
+      editable && h('button', { class: 'btn sm danger ghost', title: 'Borrar este generador (los siguientes se renumeran)', onClick: borrarGeneradorFlow }, '🗑 Eliminar generador'),
       !editable && h('span', { class: 'tag ok' }, '🔒 estim. cerrada')
     ]),
     h('div', { class: 'mono muted', style: { fontSize: '12px', marginTop: '8px' } }, concepto.clave),
