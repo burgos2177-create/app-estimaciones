@@ -473,6 +473,7 @@ async function printConfigDialog(obra, estId, formato) {
   const soloMov = h('input', { type: 'checkbox', checked: true });
   const mostrarAmort = h('input', { type: 'checkbox', checked: anticipoPct > 0, disabled: anticipoPct === 0 });
   const mostrarEC = h('input', { type: 'checkbox', checked: true });
+  const incluirMemoria = h('input', { type: 'checkbox' });
   const incluirAnexo = h('input', { type: 'checkbox' });
   const notas = h('textarea', { rows: 3, placeholder: 'Notas que aparecerán al final del PDF (opcional)…', style: { width: '100%', resize: 'vertical' } });
 
@@ -505,6 +506,7 @@ async function printConfigDialog(obra, estId, formato) {
     h('label', { class: 'row', style: { padding: '4px 0' } }, [soloMov, h('span', {}, 'Solo conceptos con avance en esta estimación')]),
     h('label', { class: 'row', style: { padding: '4px 0' } }, [mostrarAmort, h('span', {}, 'Mostrar amortización de anticipo' + (anticipoPct === 0 ? ' (sin anticipo configurado)' : ` (${pct(anticipoPct)})`))]),
     h('label', { class: 'row', style: { padding: '4px 0' } }, [mostrarEC, h('span', {}, 'Incluir bloque de Estado de Cuenta')]),
+    h('label', { class: 'row', style: { padding: '4px 0' } }, [incluirMemoria, h('span', {}, '📐 Incluir memoria de generadores (detalle de medición, solo PDF)')]),
     h('label', { class: 'row', style: { padding: '4px 0' } }, [incluirAnexo, h('span', {}, '📎 Anexar croquis y fotos del sitio (requiere Drive conectado, solo PDF)')]),
 
     h('h3', { style: { marginTop: '14px' } }, 'Notas adicionales'),
@@ -521,6 +523,7 @@ async function printConfigDialog(obra, estId, formato) {
         soloMovimiento: soloMov.checked,
         mostrarAmortizacion: mostrarAmort.checked,
         mostrarEstadoCuenta: mostrarEC.checked,
+        incluirMemoria: incluirMemoria.checked,
         incluirAnexoFotos: incluirAnexo.checked,
         notas: notas.value || ''
       };
