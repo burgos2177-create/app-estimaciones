@@ -846,15 +846,24 @@ export async function exportResumenPdf(obra, estId, cfg = {}) {
       30, doc.lastAutoTable.finalY + 10);
   }
 
+  let tailY = doc.lastAutoTable ? doc.lastAutoTable.finalY : 250;   // fin del contenido financiero
+
   if (cfg.notas && cfg.notas.trim()) {
-    let ny = doc.lastAutoTable ? doc.lastAutoTable.finalY + 70 : 200;
+    let ny = tailY + 40;
     if (ny > 600) { doc.addPage(); ny = 80; }
     doc.setFontSize(9); doc.setTextColor(40);
     doc.setFont('helvetica', 'bold'); doc.text('NOTAS / OBSERVACIONES', 30, ny);
     doc.setFont('helvetica', 'normal'); doc.setTextColor(70);
     const lines = doc.splitTextToSize(cfg.notas, doc.internal.pageSize.width - 60);
     doc.text(lines, 30, ny + 14);
+    tailY = ny + 14 + lines.length * 11;
   }
+
+  // Apartado de firmas (aceptación y conformidad) — al final del documento de cobro.
+  const pageH = doc.internal.pageSize.height;
+  let fy = tailY + 48;
+  if (fy > pageH - 130) { doc.addPage(); fy = 100; }
+  drawFirmas(doc, m, fy);
 
   // Memoria de generadores (detalle de medición) — opcional
   if (cfg.incluirMemoria) {
@@ -1061,6 +1070,44 @@ function drawObraHeader(doc, m, titulo) {
   cell('Inicio', dateStr(m.fechaInicio), 1, 1);
   cell('Fin', dateStr(m.fechaFin), 2, 1);
   cell('Monto contrato C/IVA', money(m.montoContratoCIVA), 3, 1);
+}
+
+// Apartado de firmas: dos columnas (SOGRUB y cliente) con línea, cargo y fecha.
+function drawFirmas(doc, m, y) {
+  const w = doc.internal.pageSize.width;
+  const [nR, nG, nB] = BRAND.navy;
+  const [cR, cG, cB] = BRAND.cyan;
+
+  doc.setFont('helvetica', 'bold'); doc.setFontSize(10); doc.setTextColor(nR, nG, nB);
+  doc.text('ACEPTACIÓN Y CONFORMIDAD', 30, y);
+  doc.setDrawColor(cR, cG, cB); doc.setLineWidth(1.2); doc.line(30, y + 5, 178, y + 5); doc.setLineWidth(0.2);
+  doc.setFont('helvetica', 'normal'); doc.setFontSize(8); doc.setTextColor(110);
+  doc.text('Las partes manifiestan su conformidad con los conceptos, cantidades e importes de la presente estimación.', 30, y + 20);
+
+  const gap = 50;
+  const colW = (w - 60 - gap) / 2;
+  const x1 = 30, x2 = 30 + colW + gap;
+  const lineY = y + 90;   // espacio arriba de la línea para firmar
+
+  doc.setDrawColor(90); doc.setLineWidth(0.7);
+  doc.line(x1, lineY, x1 + colW, lineY);
+  doc.line(x2, lineY, x2 + colW, lineY);
+  doc.setLineWidth(0.2);
+
+  const blk = (x, titulo, entidad, rol) => {
+    const cx = x + colW / 2;
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(9); doc.setTextColor(nR, nG, nB);
+    doc.text(titulo, cx, lineY + 14, { align: 'center' });
+    doc.setFont('helvetica', 'normal'); doc.setFontSize(8.5); doc.setTextColor(45);
+    if (entidad) doc.text(doc.splitTextToSize(entidad, colW).slice(0, 1), cx, lineY + 27, { align: 'center' });
+    doc.setFontSize(7.5); doc.setTextColor(125);
+    doc.text('Nombre y firma · ' + rol, cx, lineY + 39, { align: 'center' });
+  };
+  blk(x1, 'POR SOGRUB', (m.construye && /sogrub/i.test(m.construye)) ? m.construye : 'Grupo Constructor', 'Elaboró y autoriza');
+  blk(x2, 'POR EL CLIENTE', m.cliente || '', 'Recibí de conformidad');
+
+  doc.setFontSize(8); doc.setTextColor(120);
+  doc.text(`${m.municipio ? m.municipio + ', a ' : 'Lugar y fecha: '}____ de ________________ de 20____`, w / 2, lineY + 58, { align: 'center' });
 }
 
 function drawFooter(doc, data, m) {
