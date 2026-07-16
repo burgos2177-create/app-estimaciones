@@ -103,7 +103,10 @@ export async function signIn() {
         }
       });
     }
-    tokenClient.requestAccessToken({ prompt: accessToken ? '' : 'consent' });
+    // prompt:'' → Google reutiliza la sesión y el consentimiento ya otorgado sin
+    // forzar la pantalla completa cada vez. (Solo la PRIMERA autorización mostrará
+    // el consentimiento; después es silencioso mientras el token siga vigente.)
+    tokenClient.requestAccessToken({ prompt: '' });
   });
 }
 
