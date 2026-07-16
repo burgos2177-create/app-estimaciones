@@ -68,25 +68,39 @@ export function isSignedIn() {
   return !!accessToken && tokenExpires > Date.now() + 30_000;
 }
 
+// El tokenClient se crea UNA vez, pero su callback es único: no puede quedar
+// amarrado al resolve/reject de la primera llamada, o toda conexión posterior
+// se colgaría (el token llega pero resuelve la promesa vieja). Por eso el
+// resolve/reject de la llamada EN CURSO se guardan aquí y el callback los usa.
+let pendingResolve = null, pendingReject = null;
+
 export async function signIn() {
   if (!isConfigured()) {
     throw new Error('Google Drive no configurado. Pon clientId en firebase-config.js');
   }
   await initDrive();
   return new Promise((resolve, reject) => {
+    pendingResolve = resolve;
+    pendingReject = reject;
     if (!tokenClient) {
       tokenClient = window.google.accounts.oauth2.initTokenClient({
         client_id: googleConfig.clientId,
         scope: SCOPE,
         callback: (resp) => {
-          if (resp.error) { reject(new Error(resp.error_description || resp.error)); return; }
+          const rej = pendingReject, res = pendingResolve;
+          pendingResolve = pendingReject = null;
+          if (resp.error) { rej && rej(new Error(resp.error_description || resp.error)); return; }
           accessToken = resp.access_token;
           tokenExpires = Date.now() + ((resp.expires_in || 3600) * 1000);
           window.gapi.client.setToken({ access_token: accessToken });
           localStorage.setItem(TOKEN_KEY, JSON.stringify({ token: accessToken, expires: tokenExpires }));
-          resolve(resp);
+          res && res(resp);
         },
-        error_callback: (err) => reject(new Error(err?.message || 'OAuth cancelado'))
+        error_callback: (err) => {
+          const rej = pendingReject;
+          pendingResolve = pendingReject = null;
+          rej && rej(new Error(err?.message || 'OAuth cancelado'));
+        }
       });
     }
     tokenClient.requestAccessToken({ prompt: accessToken ? '' : 'consent' });

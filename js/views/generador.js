@@ -230,18 +230,25 @@ export async function renderGenerador({ params }) {
   if (!Array.isArray(gen.croquis)) gen.croquis = [];
   if (!Array.isArray(gen.fotos)) gen.fotos = [];
 
+  // Refresco compartido del estado de Drive: conectar en UNA tarjeta actualiza
+  // AMBAS (croquis y fotos comparten la misma sesión global de Drive).
+  const driveRefreshers = [];
+
   const croquisCard = buildAttachmentsCard({
     title: 'Croquis del concepto',
     descripcion: 'Dibujos o esquemas que respaldan la medición.',
     kind: 'croquis',
-    obraId, gid, obra, est, gen, concepto, editable
+    obraId, gid, obra, est, gen, concepto, editable, driveRefreshers
   });
   const fotosCard = buildAttachmentsCard({
     title: 'Fotos del sitio',
     descripcion: 'Evidencia fotográfica de los trabajos ejecutados.',
     kind: 'fotos',
-    obraId, gid, obra, est, gen, concepto, editable
+    obraId, gid, obra, est, gen, concepto, editable, driveRefreshers
   });
+  // Al cargar, initDrive restaura el token persistido de forma asíncrona; cuando
+  // resuelve, refrescamos ambas tarjetas (si no, arrancarían en "desconectado").
+  if (driveConfigured()) initDrive().then(() => driveRefreshers.forEach(fn => { try { fn(); } catch {} })).catch(() => {});
 
   // ===== Footer / save bar =====
   const dirtyTag = h('span', { class: 'tag warn hidden' }, '● cambios sin guardar');
@@ -329,11 +336,16 @@ function kv(label, val) { return h('div', { class: 'field' }, [h('label', {}, la
 function deepClone(x) { return JSON.parse(JSON.stringify(x ?? null)) ?? (Array.isArray(x) ? [] : {}); }
 
 // === Bloque para subir/listar adjuntos en Drive (croquis o fotos) ===
-function buildAttachmentsCard({ title, descripcion, kind, obraId, gid, obra, est, gen, concepto, editable }) {
+function buildAttachmentsCard({ title, descripcion, kind, obraId, gid, obra, est, gen, concepto, editable, driveRefreshers }) {
   const m = obra.meta || {};
 
   const list = h('div', { class: 'attach-grid' });
   const status = h('div', { class: 'muted', style: { fontSize: '12px', marginBottom: '6px' } });
+  // Refresca ESTA tarjeta y, si hay registro compartido, TODAS (una sola sesión de Drive).
+  const refreshAll = () => {
+    const fns = (driveRefreshers && driveRefreshers.length) ? driveRefreshers : [() => { refreshStatus(); refreshList(); }];
+    fns.forEach(fn => { try { fn(); } catch {} });
+  };
 
   function refreshStatus() {
     status.innerHTML = '';
@@ -348,7 +360,7 @@ function buildAttachmentsCard({ title, descripcion, kind, obraId, gid, obra, est
   }
 
   async function connectFlow() {
-    try { await initDrive(); await driveSignIn(); refreshStatus(); refreshList(); toast('Drive conectado', 'ok'); }
+    try { await initDrive(); await driveSignIn(); refreshAll(); toast('Drive conectado', 'ok'); }
     catch (err) { toast('Error: ' + err.message, 'danger'); }
   }
 
@@ -437,6 +449,10 @@ function buildAttachmentsCard({ title, descripcion, kind, obraId, gid, obra, est
       toast('Borrado', 'ok');
     } catch (err) { toast('Error: ' + err.message, 'danger'); }
   }
+
+  // Registra el refresco de esta tarjeta en el pool compartido, para que conectar
+  // Drive desde cualquier tarjeta (o restaurar el token al cargar) actualice AMBAS.
+  if (driveRefreshers) driveRefreshers.push(() => { refreshStatus(); refreshList(); });
 
   refreshStatus();
   refreshList();
