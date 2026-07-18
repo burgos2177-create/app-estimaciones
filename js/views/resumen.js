@@ -73,8 +73,8 @@ async function draw(obraId, obra, estId) {
   const editable = est.estado === 'borrador' || state.user.role === 'admin';
   const bloqueado = buzonEstado === 'aprobado' || buzonEstado === 'cobrado' || buzonEstado === 'pagado';
   const editPagosBtn = editable
-    ? h('button', { class: 'btn sm ghost', onClick: async () => { const ok = await editPagoDialog(obraId, estId, est, ivaPct); if (ok) renderResumen({ params: { id: obraId } }); } },
-      bloqueado ? '🔒 Ver pago' : '✎ Editar pago')
+    ? h('button', { class: 'btn sm ghost', onClick: async () => { const ok = await editPagoDialog(obraId, estId, est, ivaPct, { subtotalEsta, ivaEsta }); if (ok) renderResumen({ params: { id: obraId } }); } },
+      bloqueado ? '🔒 Ver pago' : '✎ Editar / enviar al contador')
     : null;
   const badge = buzonBadge(buzonEstado, buzonItem);
 
@@ -293,7 +293,9 @@ function crumbs(obraId, nombre) {
   ];
 }
 
-async function editPagoDialog(obraId, estId, est, ivaPct) {
+async function editPagoDialog(obraId, estId, est, ivaPct, recon = {}) {
+  const reconSub = Number(recon.subtotalEsta) || 0;
+  const reconIva = Number(recon.ivaEsta) || 0;
   // Si el pago ya fue aprobado por el contador en bitácora, NO se puede editar
   // desde estimaciones (evita inconsistencia con el movimiento contable creado).
   // Para correcciones reales, el contador edita en bitácora o rechaza el buzón.
@@ -333,7 +335,9 @@ async function editPagoDialog(obraId, estId, est, ivaPct) {
     return false;
   }
 
-  const cur = est.pagoCliente || { subtotal: 0, iva: 0, importe: 0, fecha: Date.now() };
+  // Sin pago previo, se pre-llena con los montos RECONCILIADOS de la estimación
+  // (subtotal ejecutado + IVA manual) para que lo que reciba el contador coincida.
+  const cur = est.pagoCliente || { subtotal: reconSub, iva: reconIva, importe: reconSub + reconIva, fecha: Date.now() };
   const subtotalIn = h('input', { type: 'number', step: '0.01', value: cur.subtotal || '' });
   const ivaIn = h('input', { type: 'number', step: '0.01', value: cur.iva || '' });
   const importeIn = h('input', { type: 'number', step: '0.01', value: cur.importe || '' });
@@ -356,11 +360,23 @@ async function editPagoDialog(obraId, estId, est, ivaPct) {
   subtotalIn.addEventListener('input', syncFromSubtotal);
   importeIn.addEventListener('input', syncFromImporte);
 
+  const ivaEsManual = est.ivaMonto != null && est.ivaMonto !== '';
+  const cargarBtn = h('button', {
+    type: 'button', class: 'btn ghost sm',
+    title: 'Copia el subtotal ejecutado y el IVA de esta estimación',
+    onClick: () => { subtotalIn.value = reconSub.toFixed(2); ivaIn.value = reconIva.toFixed(2); importeIn.value = (reconSub + reconIva).toFixed(2); }
+  }, '↧ Cargar montos de la estimación');
+
   const body = h('div', {}, [
-    h('p', { class: 'muted', style: { marginTop: 0, fontSize: '12px' } }, `Registra el pago que el cliente hizo por la estimación #${est.numero}. IVA aplicado: ${pct(ivaPct)}.`),
+    h('p', { class: 'muted', style: { marginTop: 0, fontSize: '12px' } }, [
+      `Esto se ENVÍA AL CONTADOR (bitácora fiscal) como el cobro de la estimación #${est.numero}. `,
+      h('b', {}, ivaEsManual ? `El IVA es el manual de la estimación: ${money(reconIva)}.` : `IVA ${pct(ivaPct)}.`),
+      ' Debe coincidir con el IVA que se le cobra al cliente.'
+    ]),
+    h('div', { class: 'row', style: { margin: '2px 0 10px' } }, [cargarBtn]),
     h('div', { class: 'grid-2' }, [
       h('div', { class: 'field' }, [h('label', {}, 'Subtotal'), subtotalIn]),
-      h('div', { class: 'field' }, [h('label', {}, 'IVA (auto)'), ivaIn])
+      h('div', { class: 'field' }, [h('label', {}, ivaEsManual ? 'IVA (manual)' : 'IVA (auto)'), ivaIn])
     ]),
     h('div', { class: 'grid-2', style: { marginTop: '10px' } }, [
       h('div', { class: 'field' }, [h('label', {}, 'Importe (con IVA)'), importeIn]),
