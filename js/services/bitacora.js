@@ -36,11 +36,18 @@ export function setBitacoraMeta(obraId, patch){ return rupdate(`${_base(obraId)}
 // lanza (invariante violada / carrera), la transacción aborta sin escribir.
 async function _tx(obraId, fn) {
   let out, err;
-  await runTransaction(_notasRef(obraId), (notas) => {
-    notas = notas || {};
-    try { out = fn(notas); err = null; }
-    catch (e) { err = e; return; }   // return undefined = abortar transacción
-    return notas;
+  await runTransaction(_notasRef(obraId), (current) => {
+    const notas = current || {};
+    try { out = fn(notas); err = null; return notas; }
+    catch (e) {
+      err = e;
+      // OJO: NO devolver undefined aquí — eso ABORTA la transacción y Firebase
+      // no reintenta. La 1ª pasada corre con el caché LOCAL (que puede venir
+      // nulo/viejo) y ahí una nota puede salir "no encontrada" aunque exista en
+      // el servidor. Devolviendo el valor recibido, Firebase detecta el desajuste
+      // con el servidor y RE-CORRE fn con los datos frescos (donde sí está).
+      return current == null ? {} : current;
+    }
   });
   if (err) throw err;
   return out;
