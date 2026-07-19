@@ -20,19 +20,30 @@ import { comprimir, subirFotoTimeout } from '../services/bitacora-fotos.js';
 // Sube blobs de foto a una nota YA guardada (best-effort, con timeout) y los
 // adjunta. Nunca lanza: devuelve { ok, fail } para avisar sin romper el flujo.
 // Se usa tras asentar y desde el botón "Agregar fotos" de cada nota.
+// Traduce el código de error de Firebase Storage a algo accionable.
+function fotoErrMsg(err) {
+  const c = (err && (err.code || '')) + '';
+  if (c.includes('unauthorized')) return 'sin permiso en Storage (revisar reglas de Storage)';
+  if (c.includes('unauthenticated')) return 'sesión no válida (vuelve a entrar)';
+  if (c.includes('retry-limit') || c.includes('unknown')) return 'red o bucket de Storage';
+  if (c.includes('quota')) return 'cuota de Storage excedida';
+  if (c.includes('demasiado')) return 'la subida tardó demasiado (señal)';
+  return c || (err && err.message) || 'error';
+}
+
 async function uploadFotosANota(notaId, blobs) {
   const nuevas = [];
-  let fail = 0;
+  let fail = 0, firstErr = null;
   for (let i = 0; i < blobs.length; i++) {
     const key = `${Date.now()}-${i}`;   // clave única → no pisa fotos previas
     try { nuevas.push(await subirFotoTimeout(V.obraId, notaId, key, blobs[i])); }
-    catch (e) { fail++; console.warn('[Bitácora] foto no subida:', e); }
+    catch (e) { fail++; if (!firstErr) firstErr = e; console.warn('[Bitácora] foto no subida:', e && e.code, e); }
   }
   if (nuevas.length) {
     try { await agregarFotosNota(V.obraId, notaId, nuevas); }
-    catch (e) { fail += nuevas.length; console.warn('[Bitácora] no se adjuntaron fotos:', e); return { ok: 0, fail }; }
+    catch (e) { fail += nuevas.length; if (!firstErr) firstErr = e; console.warn('[Bitácora] no se adjuntaron fotos:', e); return { ok: 0, fail, err: firstErr }; }
   }
-  return { ok: nuevas.length, fail };
+  return { ok: nuevas.length, fail, err: firstErr };
 }
 
 // Abre el selector de fotos y las adjunta a una nota existente (asentada o
@@ -54,7 +65,7 @@ async function agregarFotosFlow(n) {
     toast('Subiendo fotos…');
     const r = await uploadFotosANota(n.id, blobs);
     await reload();
-    toast(r.fail ? `${r.ok} foto(s) agregada(s), ${r.fail} fallaron — reintenta` : `${r.ok} foto(s) agregada(s)`, r.fail ? 'warn' : 'ok');
+    toast(r.fail ? `${r.ok} agregada(s), ${r.fail} fallaron: ${fotoErrMsg(r.err)}` : `${r.ok} foto(s) agregada(s)`, r.fail ? 'danger' : 'ok');
   };
   input.click();
 }
@@ -505,7 +516,7 @@ function openEditor(nota, opts) {
         uploadFotosANota(notaId, pendientes).then(async (r) => {
           const b2 = await loadBitacora(V.obraId); V.notas = b2.notas;
           try { renderLista(); } catch { /* el usuario navegó fuera de bitácora */ }
-          toast(r.fail ? `${r.ok} foto(s) subida(s), ${r.fail} fallaron — reintenta con "📷 Agregar fotos"` : `${r.ok} foto(s) subida(s)`, r.fail ? 'warn' : 'ok');
+          toast(r.fail ? `${r.ok} subida(s), ${r.fail} fallaron: ${fotoErrMsg(r.err)}` : `${r.ok} foto(s) subida(s)`, r.fail ? 'danger' : 'ok');
         }).catch(() => {});
       }
     } catch (e) { busy = false; toast('Error: ' + (e.message || e), 'danger'); }
