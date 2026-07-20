@@ -169,6 +169,7 @@ export async function renderGenerador({ params }) {
     h('div', { class: 'row' }, [
       h('h3', { style: { margin: 0 } }, 'Partidas de medición'),
       h('div', { style: { flex: 1 } }),
+      editable && h('button', { class: 'btn sm', title: 'Copiar las partidas de otro generador con la misma plantilla (mismas columnas)', onClick: copiarDeOtroDialog }, '⧉ Copiar de otro generador'),
       editable && h('button', { class: 'btn sm', onClick: () => duplicateLastDialog() }, '⎘ Duplicar última'),
       editable && h('button', { class: 'btn primary sm', onClick: () => { work.partidas.push(blankPartida(columns)); work.dirty = true; renderPartidas(); markDirty(); } }, '+ Partida')
     ]),
@@ -180,6 +181,92 @@ export async function renderGenerador({ params }) {
     const last = work.partidas[work.partidas.length - 1];
     work.partidas.push({ ...last });
     work.dirty = true; renderPartidas(); markDirty();
+  }
+
+  // Copia las partidas de OTRO generador de la obra que comparta la misma plantilla
+  // (mismas columnas). Útil cuando conceptos distintos se cuantifican igual por la
+  // naturaleza del proceso (p.ej. afine y fumigación miden la misma área de cepa).
+  async function copiarDeOtroDialog() {
+    const curSig = plantillaSig(columns);
+    const candidatos = Object.entries(obra.generadores || {})
+      .filter(([id, g]) => id !== gid && (g.partidas || []).length > 0)
+      .map(([id, g]) => {
+        const c = getConceptoById(obra, g.conceptoId);
+        if (!c || plantillaSig(getColumns(c) || []) !== curSig) return null;
+        const calcC = getCalcFn(c);
+        const tot = (g.partidas || []).reduce((s, p) => s + (calcC(p) || 0), 0);
+        return { id, g, c, estN: obra.estimaciones?.[g.estimacionId]?.numero ?? '?', tot, count: g.partidas.length };
+      })
+      .filter(Boolean)
+      .sort((a, b) => (Number(a.estN) - Number(b.estN)) || ((a.g.numero || 0) - (b.g.numero || 0)));
+
+    if (!candidatos.length) {
+      toast('No hay otros generadores con la misma plantilla y partidas para copiar', 'warn');
+      return;
+    }
+
+    let selectedId = candidatos[0].id;
+    let mode = work.partidas.length ? 'append' : 'append';
+
+    const optionRow = (cand) => {
+      const radio = h('input', { type: 'radio', name: 'copysrc', value: cand.id, checked: cand.id === selectedId });
+      radio.addEventListener('change', () => { selectedId = cand.id; });
+      return h('label', { class: 'copy-src-row', style: {
+        display: 'flex', gap: '10px', alignItems: 'flex-start', padding: '10px 12px',
+        border: '1px solid var(--line)', borderRadius: '8px', cursor: 'pointer', marginBottom: '8px'
+      } }, [
+        radio,
+        h('div', { style: { flex: 1, minWidth: 0 } }, [
+          h('div', { style: { display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' } }, [
+            h('span', { class: 'tag muted' }, `Est. #${cand.estN} · Gen #${cand.g.numero}`),
+            h('span', { class: 'mono', style: { fontSize: '12px' } }, cand.c.clave || ''),
+            h('span', { class: 'tag' }, `${cand.count} partida${cand.count === 1 ? '' : 's'}`),
+            h('span', { class: 'mono muted', style: { fontSize: '12px' } }, `∑ ${num(cand.tot, 4)} ${cand.c.unidad || ''}`)
+          ]),
+          h('div', { class: 'muted', style: { fontSize: '12px', marginTop: '4px' } }, cand.c.descripcion || '')
+        ])
+      ]);
+    };
+
+    const modeWrap = h('div', { style: { marginTop: '4px' } });
+    if (work.partidas.length) {
+      const rAppend = h('input', { type: 'radio', name: 'copymode', checked: true });
+      rAppend.addEventListener('change', () => { mode = 'append'; });
+      const rReplace = h('input', { type: 'radio', name: 'copymode' });
+      rReplace.addEventListener('change', () => { mode = 'replace'; });
+      modeWrap.appendChild(h('div', { class: 'muted', style: { fontSize: '12px', margin: '10px 0 6px' } },
+        `Este generador ya tiene ${work.partidas.length} partida(s). ¿Qué hago con ellas?`));
+      modeWrap.appendChild(h('label', { style: { display: 'inline-flex', gap: '6px', marginRight: '16px', cursor: 'pointer' } }, [rAppend, 'Agregar al final']));
+      modeWrap.appendChild(h('label', { style: { display: 'inline-flex', gap: '6px', cursor: 'pointer' } }, [rReplace, 'Reemplazar las actuales']));
+    }
+
+    const body = h('div', {}, [
+      h('p', { class: 'muted', style: { fontSize: '13px', marginTop: 0 } },
+        'Se copian las mediciones (partidas). Los ajustes y las fotos no se copian.'),
+      h('div', { style: { maxHeight: '46vh', overflowY: 'auto' } }, candidatos.map(optionRow)),
+      modeWrap
+    ]);
+
+    const ok = await modal({
+      title: 'Copiar partidas de otro generador',
+      size: 'lg',
+      confirmLabel: 'Copiar partidas',
+      body,
+      onConfirm: () => true
+    });
+    if (!ok) return;
+
+    const src = candidatos.find(x => x.id === selectedId);
+    if (!src) return;
+    const rows = (src.g.partidas || []).map(p => {
+      const o = {};
+      for (const col of columns) o[col.key] = p[col.key] ?? (col.type === 'number' ? '' : '');
+      if (p.observaciones) o.observaciones = p.observaciones;
+      return o;
+    });
+    work.partidas = mode === 'replace' ? rows : work.partidas.concat(rows);
+    work.dirty = true; renderPartidas(); markDirty();
+    toast(`${rows.length} partida(s) copiada(s) de Est. #${src.estN} · Gen #${src.g.numero}`, 'ok');
   }
 
   // ===== Ajustes =====
@@ -332,6 +419,13 @@ export async function renderGenerador({ params }) {
 }
 
 function kv(label, val) { return h('div', { class: 'field' }, [h('label', {}, label), h('div', {}, val ?? '—')]); }
+
+// Firma de una plantilla = columnas (clave:tipo) en orden. Dos generadores pueden
+// intercambiar partidas si sus firmas coinciden (mismas columnas y tipos), aunque
+// sean conceptos distintos o plantillas distintas con idéntica estructura.
+function plantillaSig(cols) {
+  return (cols || []).map(c => `${c.key}:${c.type || 'text'}`).join('|');
+}
 
 function deepClone(x) { return JSON.parse(JSON.stringify(x ?? null)) ?? (Array.isArray(x) ? [] : {}); }
 
