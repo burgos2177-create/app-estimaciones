@@ -8,7 +8,6 @@ import { rread, loadObra, setPagoCliente, setEstimacionIvaMonto, updateObraMeta,
 import { state } from '../state/store.js';
 import { money, num, dateMx, pct } from '../util/format.js';
 import { buildResumenData, exportResumenPdf, exportResumenXlsx, exportEstimacionJson } from '../services/export.js';
-import { amortRateOnSubtotal } from '../services/contrato.js';
 import { initDrive, isConfigured as driveConfigured, isSignedIn as driveSignedIn, signIn as driveSignIn } from '../services/drive.js';
 
 export async function renderResumen({ params }) {
@@ -54,7 +53,7 @@ async function draw(obraId, obra, estId) {
   const ests = obra.estimaciones || {};
   const estsArr = Object.entries(ests).map(([id, e]) => ({ id, ...e })).sort((a, b) => (a.numero || 0) - (b.numero || 0));
   const data = buildResumenData(obra, estId);
-  const { est, ivaPct, anticipoPct, rows, subtotalEsta, ivaEsta, ivaAcum, ivaManual, importeEsta, avPond, importeAcumEjec, importeAcumEjecCIVA, subtotalPagado, ivaPagado, importePagado, diferencia, diferenciaPct, anticipoMontoBase, amortizacionEsta, amortizacionAcum, saldoAnticipoPorAmortizar, netoEsta, netoAcum, anticipoRecibido, totalRecibidoCliente, saldoCaja, excesoAnticipo, abonosCliente, sugeridoPagoJusto, amortizacionAcumHasta, netoAcumHasta, pagosPrevios } = data;
+  const { est, ivaPct, anticipoPct, rows, subtotalEsta, ivaEsta, ivaAcum, ivaManual, importeEsta, avPond, importeAcumEjec, importeAcumEjecCIVA, subtotalPagado, ivaPagado, importePagado, diferencia, diferenciaPct, anticipoMontoBase, amortizacionEsta, amortizacionAcum, saldoAnticipoPorAmortizar, netoEsta, netoAcum, anticipoRecibido, totalRecibidoCliente, saldoCaja, excesoAnticipo, abonosCliente, subtotalAbono, sugeridoPagoJusto, amortizacionAcumHasta, netoAcumHasta, pagosPrevios } = data;
 
   const estSel = h('select', { onchange: e => { draw(obraId, obra, e.target.value); } },
     estsArr.map(es => h('option', { value: es.id, selected: es.id === estId }, `Estimación #${es.numero}`)));
@@ -130,7 +129,7 @@ async function draw(obraId, obra, estId) {
           ? `incluye ${money(excesoAnticipo)} de anticipo excedente (a favor)`
           : `descuenta ${money(-excesoAnticipo)} de anticipo faltante`) : null
     ]),
-    h('td', { class: 'num' }, money(subtotalPagado)),
+    h('td', { class: 'num' }, money(subtotalAbono)),
     h('td', { class: 'num muted' }, money(ivaPagado)),
     h('td', { class: 'num' }, h('b', {}, money(abonosCliente)))
   ]));
@@ -429,12 +428,15 @@ async function editPagoDialog(obraId, estId, est, ivaPct, recon = {}) {
     body, confirmLabel: 'Guardar y enviar al contador',
     onConfirm: async () => {
       try {
+        // Abono NETO: el importe es lo realmente cobrado; el IVA es el de la
+        // estimación (MANUAL si se capturó, si no 16%) y NO se recalcula como % del
+        // importe; el subtotal es el resto para que subtotal + IVA = importe.
+        const importeNeto = Number(importeIn.value) || 0;
         const pago = {
-          // Subtotal e IVA = fiscal de la estimación (lo facturado, va al contador).
-          subtotal: reconSub,
+          subtotal: importeNeto - reconIva,
           iva: reconIva,
-          // Importe = NETO efectivamente cobrado (ya amortizado / con saldo a favor).
-          importe: Number(importeIn.value) || 0,
+          ivaManual: ivaEsManual,
+          importe: importeNeto,
           fecha: fechaIn.value ? new Date(fechaIn.value).getTime() : Date.now(),
           metodoPago: mEfectivo.checked ? 'efectivo' : 'transferencia',
           esPagoJusto: rJusto.checked
@@ -457,25 +459,24 @@ async function editPagoDialog(obraId, estId, est, ivaPct, recon = {}) {
 }
 
 async function sincronizarConBuzon(obraId, estId, est, pago) {
-  // Lee link de obra → proyecto contable, meta e integración para el snapshot
-  const [links, obraMeta, integ] = await Promise.all([
+  // Lee link de obra → proyecto contable y meta para el snapshot
+  const [links, obraMeta] = await Promise.all([
     getObraLinks(),
-    rread(`obras/${obraId}/meta`),
-    rread(`obras/${obraId}/integracion`)
+    rread(`obras/${obraId}/meta`)
   ]);
   const proyectoId = links?.[obraId] || null;
   const obraNombre = obraMeta?.nombre || '';
 
-  // Desglose que bitácora necesita: importe sin IVA, IVA y amortización de
-  // anticipo SEPARADOS. La amortización es proporcional al avance (subtotal) de
-  // esta estimación, según la base del anticipo de la obra.
+  // ABONO NETO: se contabiliza el neto realmente cobrado. El desglose CUADRA
+  // (importe_sin_iva + iva = importe), así bitácora NO recalcula el IVA como % del
+  // importe. El IVA es el de la estimación (manual si se capturó) y viaja explícito
+  // con su bandera. La amortización del anticipo NO va aquí (vive en el bloque de
+  // Anticipo de estimaciones); se manda 0 para que bitácora no la reste de nuevo.
   const ivaPct = Number(obraMeta?.ivaPct ?? 0.16);
-  const anticipoPct = Number(obraMeta?.anticipoPct ?? 0);
-  const anticipoBase = integ?.anticipo_base || 'subtotal';
-  const amortRate = amortRateOnSubtotal(anticipoPct, anticipoBase, ivaPct);
-  const importe_sin_iva = Number(pago.subtotal) || 0;
-  const iva = Number(pago.iva) || 0;
-  const amortizacion_anticipo = Math.round(importe_sin_iva * amortRate * 100) / 100;
+  const importe_sin_iva = Math.round((Number(pago.subtotal) || 0) * 100) / 100;
+  const iva = Math.round((Number(pago.iva) || 0) * 100) / 100;
+  const ivaManual = pago.ivaManual === true;
+  const amortizacion_anticipo = 0;
 
   // Busca si ya hay un item PENDIENTE o HUÉRFANO para esta estimación. Si sí,
   // lo actualiza (vuelve a pendiente). Si está aprobado, no debería llegar aquí
@@ -498,10 +499,13 @@ async function sincronizarConBuzon(obraId, estId, est, pago) {
     estimId: estId,
     estimNumero: est.numero,
     monto: pago,
-    // Desglose para bitácora (bolsitas de costo + bolsita de IVA):
+    // Desglose para bitácora (cuadra: importe_sin_iva + iva = importe cobrado):
     importe_sin_iva,
     iva,
-    amortizacion_anticipo,
+    ivaManual,           // true = usar el IVA enviado tal cual (no recalcular 16%)
+    ivaPct,              // referencia de la tasa de la obra
+    importe: Math.round((Number(pago.importe) || 0) * 100) / 100,
+    amortizacion_anticipo,   // 0: el abono ya es neto (amortización va aparte)
     // Cómo pagó el cliente (para el registro de abono en el proyecto contable):
     metodoPago,
     esPagoJusto: pago.esPagoJusto === true,

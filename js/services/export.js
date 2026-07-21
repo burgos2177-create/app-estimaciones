@@ -449,6 +449,10 @@ export function buildResumenData(obra, estId) {
   const abonosCliente = importePagado + excesoAnticipo;   // pagos + excedente de anticipo
   const totalRecibidoCliente = anticipoRecibido + importePagado;
   const saldoCaja = totalRecibidoCliente - importeAcumEjecCIVA;
+  // Abono NETO: el pago del cliente se contabiliza como neto cobrado, de modo que
+  // subtotal + IVA = importe (la amortización vive en el bloque de Anticipo, no
+  // aquí). subtotalAbono es el subtotal que cuadra con abonosCliente.
+  const subtotalAbono = abonosCliente - ivaPagado;
 
   // Diferencia financiera "al corte de ESTA estimación": neto a cobrar acumulado
   // considerando SOLO las estimaciones hasta esta (numero <= actual), menos los
@@ -479,7 +483,7 @@ export function buildResumenData(obra, estId) {
     pagoCliente: est.pagoCliente || null,
     diferencia: netoAcum - abonosCliente,
     diferenciaPct: netoAcum ? (netoAcum - abonosCliente) / netoAcum : 0,
-    subtotalPagado, ivaPagado, importePagado,
+    subtotalPagado, ivaPagado, importePagado, subtotalAbono,
     excesoAnticipo, abonosCliente,
     anticipoRecibido, totalRecibidoCliente, saldoCaja,
     netoAcumHasta, amortizacionAcumHasta, pagosPrevios, sugeridoPagoJusto
@@ -601,7 +605,7 @@ function applyPrintFilter(rows, cfg) {
 export function exportResumenXlsx(obra, estId, cfg = {}) {
   cfg = { ...DEFAULT_PRINT_CFG, ...cfg };
   const data = buildResumenData(obra, estId);
-  const { m, est, ivaPct, anticipoPct, subtotalEsta, ivaEsta, importeEsta, avPond, diferencia, diferenciaPct, importeAcumEjec, importeAcumEjecCIVA, subtotalPagado, ivaPagado, importePagado, abonosCliente, ivaAcum, anticipoMontoBase, anticipoTotal, amortizacionEsta, amortizacionAcum, saldoAnticipoPorAmortizar, netoEsta, netoAcum, anticipoRecibido, totalRecibidoCliente, saldoCaja } = data;
+  const { m, est, ivaPct, anticipoPct, subtotalEsta, ivaEsta, importeEsta, avPond, diferencia, diferenciaPct, importeAcumEjec, importeAcumEjecCIVA, subtotalPagado, ivaPagado, importePagado, subtotalAbono, abonosCliente, ivaAcum, anticipoMontoBase, anticipoTotal, amortizacionEsta, amortizacionAcum, saldoAnticipoPorAmortizar, netoEsta, netoAcum, anticipoRecibido, totalRecibidoCliente, saldoCaja } = data;
   const rows = applyPrintFilter(data.rows, cfg);
   const titulo = cfg.modo === 'estadoCuenta' ? 'ESTADO DE CUENTA' : 'RESUMEN DE ESTIMACIÓN';
 
@@ -660,7 +664,7 @@ export function exportResumenXlsx(obra, estId, cfg = {}) {
       aoa.push(['Neto a cobrar (esta)', '', '', netoEsta]);
       aoa.push(['Neto a cobrar (acumulado)', '', '', netoAcum]);
     }
-    aoa.push(['Pagos cliente (acumulado)', subtotalPagado, ivaPagado, abonosCliente]);
+    aoa.push(['Pagos cliente (acumulado)', subtotalAbono, ivaPagado, abonosCliente]);
     aoa.push([]);
     aoa.push(['DIFERENCIA FINANCIERA', '', '', diferencia]);
     aoa.push(['DIFERENCIA FINANCIERA %', '', '', diferenciaPct]);
@@ -717,7 +721,7 @@ export function exportResumenXlsx(obra, estId, cfg = {}) {
 export async function exportResumenPdf(obra, estId, cfg = {}) {
   cfg = { ...DEFAULT_PRINT_CFG, ...cfg };
   const data = buildResumenData(obra, estId);
-  const { m, est, ivaPct, anticipoPct, subtotalEsta, ivaEsta, importeEsta, avPond, diferencia, diferenciaPct, importeAcumEjec, importeAcumEjecCIVA, subtotalPagado, ivaPagado, importePagado, abonosCliente, ivaAcum, anticipoMontoBase, anticipoTotal, amortizacionEsta, amortizacionAcum, saldoAnticipoPorAmortizar, netoEsta, netoAcum, anticipoRecibido, totalRecibidoCliente, saldoCaja } = data;
+  const { m, est, ivaPct, anticipoPct, subtotalEsta, ivaEsta, importeEsta, avPond, diferencia, diferenciaPct, importeAcumEjec, importeAcumEjecCIVA, subtotalPagado, ivaPagado, importePagado, subtotalAbono, abonosCliente, ivaAcum, anticipoMontoBase, anticipoTotal, amortizacionEsta, amortizacionAcum, saldoAnticipoPorAmortizar, netoEsta, netoAcum, anticipoRecibido, totalRecibidoCliente, saldoCaja } = data;
   const rows = applyPrintFilter(data.rows, cfg);
   const isEstadoCuenta = cfg.modo === 'estadoCuenta';
 
@@ -805,7 +809,7 @@ export async function exportResumenPdf(obra, estId, cfg = {}) {
       ecBody.push([{ content: 'Neto a cobrar (esta)', styles: { fontStyle: 'bold' } }, '—', '—', { content: money(netoEsta), styles: { fontStyle: 'bold' } }]);
       ecBody.push([{ content: 'Neto a cobrar (acumulado)', styles: { fontStyle: 'bold' } }, '—', '—', { content: money(netoAcum), styles: { fontStyle: 'bold' } }]);
     }
-    ecBody.push(['Pagos cliente (acumulado)', money(subtotalPagado), money(ivaPagado), money(abonosCliente)]);
+    ecBody.push(['Pagos cliente (acumulado)', money(subtotalAbono), money(ivaPagado), money(abonosCliente)]);
 
     doc.autoTable({
       startY: yy + 22,
