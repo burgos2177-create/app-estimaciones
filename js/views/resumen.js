@@ -74,7 +74,7 @@ async function draw(obraId, obra, estId) {
   const bloqueado = buzonEstado === 'aprobado' || buzonEstado === 'cobrado' || buzonEstado === 'pagado';
   const editPagosBtn = editable
     ? h('button', { class: 'btn sm ghost', onClick: async () => { const ok = await editPagoDialog(obraId, estId, est, ivaPct, { subtotalEsta, ivaEsta }); if (ok) renderResumen({ params: { id: obraId } }); } },
-      bloqueado ? '🔒 Ver pago' : '✎ Editar / enviar al contador')
+      bloqueado ? '🔒 Ver pago' : '💵 Registrar / enviar pago')
     : null;
   const badge = buzonBadge(buzonEstado, buzonItem);
 
@@ -325,6 +325,10 @@ async function editPagoDialog(obraId, estId, est, ivaPct, recon = {}) {
           h('div', { class: 'field' }, [h('label', {}, 'Importe'), h('div', { class: 'mono', style: { color: 'var(--accent)', fontWeight: 600 } }, money(it.monto?.importe || 0))]),
           h('div', { class: 'field' }, [h('label', {}, 'Fecha del pago'), h('div', {}, it.fecha ? dateMx(it.fecha) : '—')])
         ]),
+        it.metodoPago && h('div', { class: 'field', style: { marginTop: '8px' } }, [
+          h('label', {}, 'Método de pago'),
+          h('div', {}, it.metodoPago === 'efectivo' ? '💵 Efectivo' : '🏦 Transferencia')
+        ]),
         it.movId && h('div', { class: 'muted', style: { fontSize: '11px', marginTop: '12px' } }, [
           'ID del movimiento contable: ', h('code', {}, it.movId)
         ])
@@ -335,9 +339,17 @@ async function editPagoDialog(obraId, estId, est, ivaPct, recon = {}) {
     return false;
   }
 
-  // Sin pago previo, se pre-llena con los montos RECONCILIADOS de la estimación
-  // (subtotal ejecutado + IVA manual) para que lo que reciba el contador coincida.
-  const cur = est.pagoCliente || { subtotal: reconSub, iva: reconIva, importe: reconSub + reconIva, fecha: Date.now() };
+  // Montos RECONCILIADOS de la estimación (subtotal ejecutado + IVA manual/auto).
+  const reconImporte = reconSub + reconIva;
+  const ivaEsManual = est.ivaMonto != null && est.ivaMonto !== '';
+
+  // Estado de partida: si ya había un pago cuyo importe difiere de lo estimado,
+  // arrancamos en "otro monto" con esos valores; si no, en "justo".
+  const prev = est.pagoCliente || null;
+  const difiere = prev && Math.abs((Number(prev.importe) || 0) - reconImporte) > 0.01;
+  const startJusto = !prev || !difiere;
+  const cur = prev || { subtotal: reconSub, iva: reconIva, importe: reconImporte, fecha: Date.now() };
+
   const subtotalIn = h('input', { type: 'number', step: '0.01', value: cur.subtotal || '' });
   const ivaIn = h('input', { type: 'number', step: '0.01', value: cur.iva || '' });
   const importeIn = h('input', { type: 'number', step: '0.01', value: cur.importe || '' });
@@ -345,8 +357,7 @@ async function editPagoDialog(obraId, estId, est, ivaPct, recon = {}) {
 
   function syncFromSubtotal() {
     const s = Number(subtotalIn.value) || 0;
-    // Si la estimación tiene IVA manual, el pago default usa ese monto fijo.
-    const ivaFijo = (est.ivaMonto != null && est.ivaMonto !== '') ? Number(est.ivaMonto) : null;
+    const ivaFijo = ivaEsManual ? Number(est.ivaMonto) : null;
     const iva = ivaFijo != null ? ivaFijo : s * ivaPct;
     ivaIn.value = iva.toFixed(2);
     importeIn.value = (s + iva).toFixed(2);
@@ -360,29 +371,61 @@ async function editPagoDialog(obraId, estId, est, ivaPct, recon = {}) {
   subtotalIn.addEventListener('input', syncFromSubtotal);
   importeIn.addEventListener('input', syncFromImporte);
 
-  const ivaEsManual = est.ivaMonto != null && est.ivaMonto !== '';
-  const cargarBtn = h('button', {
-    type: 'button', class: 'btn ghost sm',
-    title: 'Copia el subtotal ejecutado y el IVA de esta estimación',
-    onClick: () => { subtotalIn.value = reconSub.toFixed(2); ivaIn.value = reconIva.toFixed(2); importeIn.value = (reconSub + reconIva).toFixed(2); }
-  }, '↧ Cargar montos de la estimación');
-
-  const body = h('div', {}, [
-    h('p', { class: 'muted', style: { marginTop: 0, fontSize: '12px' } }, [
-      `Esto se ENVÍA AL CONTADOR (bitácora fiscal) como el cobro de la estimación #${est.numero}. `,
-      h('b', {}, ivaEsManual ? `El IVA es el manual de la estimación: ${money(reconIva)}.` : `IVA ${pct(ivaPct)}.`),
-      ' Debe coincidir con el IVA que se le cobra al cliente.'
-    ]),
-    h('div', { class: 'row', style: { margin: '2px 0 10px' } }, [cargarBtn]),
+  // ¿Pagó justo lo estimado, o un monto distinto?
+  const rJusto = h('input', { type: 'radio', name: 'pago-modo', checked: startJusto });
+  const rOtro  = h('input', { type: 'radio', name: 'pago-modo', checked: !startJusto });
+  const montosWrap = h('div', { style: { marginTop: '10px', transition: 'opacity .15s' } }, [
     h('div', { class: 'grid-2' }, [
       h('div', { class: 'field' }, [h('label', {}, 'Subtotal'), subtotalIn]),
       h('div', { class: 'field' }, [h('label', {}, ivaEsManual ? 'IVA (manual)' : 'IVA (auto)'), ivaIn])
     ]),
     h('div', { class: 'grid-2', style: { marginTop: '10px' } }, [
       h('div', { class: 'field' }, [h('label', {}, 'Importe (con IVA)'), importeIn]),
-      h('div', { class: 'field' }, [h('label', {}, 'Fecha'), fechaIn])
+      h('div', { class: 'field' }, [h('label', {}, 'Fecha del pago'), fechaIn])
     ])
   ]);
+  // En modo "justo" bloqueamos los montos y los fijamos a lo estimado (la fecha
+  // sigue editable). En "otro monto" se habilitan para capturar lo que pagó.
+  function setModo(justo) {
+    [subtotalIn, ivaIn, importeIn].forEach(inp => { inp.disabled = justo; });
+    montosWrap.style.opacity = justo ? '0.55' : '1';
+    if (justo) {
+      subtotalIn.value = reconSub.toFixed(2);
+      ivaIn.value = reconIva.toFixed(2);
+      importeIn.value = reconImporte.toFixed(2);
+    }
+  }
+  rJusto.addEventListener('change', () => setModo(true));
+  rOtro.addEventListener('change', () => setModo(false));
+
+  // Método de pago (Efectivo / Transferencia). Default: transferencia.
+  const prevMetodo = prev?.metodoPago || 'transferencia';
+  const mTransfer = h('input', { type: 'radio', name: 'metodo-pago', checked: prevMetodo !== 'efectivo' });
+  const mEfectivo = h('input', { type: 'radio', name: 'metodo-pago', checked: prevMetodo === 'efectivo' });
+
+  const body = h('div', {}, [
+    h('p', { class: 'muted', style: { marginTop: 0, fontSize: '12px' } }, [
+      `Esto se ENVÍA AL CONTADOR (bitácora fiscal) y se registra como abono del cliente en el proyecto. `,
+      h('b', {}, ivaEsManual ? `El IVA es el manual de la estimación: ${money(reconIva)}.` : `IVA ${pct(ivaPct)}.`),
+      ' Debe coincidir con el IVA que se le cobra al cliente.'
+    ]),
+
+    h('h3', { style: { margin: '6px 0 6px', fontSize: '14px' } }, '¿Cuánto pagó el cliente?'),
+    h('label', { class: 'row', style: { padding: '4px 0', cursor: 'pointer' } }, [
+      rJusto, h('span', {}, ['Justo lo estimado — ', h('b', {}, money(reconImporte)),
+        h('span', { class: 'muted' }, ` (subtotal ${money(reconSub)} + IVA ${money(reconIva)})`)])
+    ]),
+    h('label', { class: 'row', style: { padding: '4px 0', cursor: 'pointer' } }, [
+      rOtro, h('span', {}, 'Pagó otro monto (capturar abajo)')
+    ]),
+    montosWrap,
+
+    h('h3', { style: { margin: '14px 0 6px', fontSize: '14px' } }, 'Método de pago'),
+    h('label', { class: 'row', style: { padding: '4px 0', cursor: 'pointer' } }, [mTransfer, h('span', {}, '🏦 Transferencia')]),
+    h('label', { class: 'row', style: { padding: '4px 0', cursor: 'pointer' } }, [mEfectivo, h('span', {}, '💵 Efectivo')])
+  ]);
+
+  setModo(startJusto);
 
   return await modal({
     title: `Pago cliente — Estimación #${est.numero}`,
@@ -393,7 +436,9 @@ async function editPagoDialog(obraId, estId, est, ivaPct, recon = {}) {
           subtotal: Number(subtotalIn.value) || 0,
           iva: Number(ivaIn.value) || 0,
           importe: Number(importeIn.value) || 0,
-          fecha: fechaIn.value ? new Date(fechaIn.value).getTime() : Date.now()
+          fecha: fechaIn.value ? new Date(fechaIn.value).getTime() : Date.now(),
+          metodoPago: mEfectivo.checked ? 'efectivo' : 'transferencia',
+          esPagoJusto: rJusto.checked
         };
         // 1) Guarda el pago localmente en la estimación (igual que antes)
         await setPagoCliente(obraId, estId, pago);
@@ -401,7 +446,7 @@ async function editPagoDialog(obraId, estId, est, ivaPct, recon = {}) {
         // 2) Escribe (o actualiza) item del buzón para que el contador apruebe
         await sincronizarConBuzon(obraId, estId, est, pago);
 
-        toast('Pago guardado y enviado al buzón del contador', 'ok');
+        toast(`Pago (${pago.metodoPago}) enviado al buzón del contador`, 'ok');
         return true;
       } catch (err) {
         console.error(err);
@@ -444,6 +489,7 @@ async function sincronizarConBuzon(obraId, estId, est, pago) {
     (it?.estado === 'pendiente' || it?.estado === 'huerfano')
   );
 
+  const metodoPago = pago.metodoPago || 'transferencia';
   const payload = {
     tipo: 'pago_cliente',
     origenApp: 'estimaciones',
@@ -457,8 +503,11 @@ async function sincronizarConBuzon(obraId, estId, est, pago) {
     importe_sin_iva,
     iva,
     amortizacion_anticipo,
+    // Cómo pagó el cliente (para el registro de abono en el proyecto contable):
+    metodoPago,
+    esPagoJusto: pago.esPagoJusto === true,
     fecha: pago.fecha,
-    descripcion: `Pago de estimación #${est.numero}${proyectoId ? '' : ' (obra sin vincular a proyecto contable)'}`,
+    descripcion: `Pago de estimación #${est.numero} (${metodoPago})${proyectoId ? '' : ' — obra sin vincular a proyecto contable'}`,
     estado: 'pendiente',
     creadoPor: state.user?.uid || ''
   };
