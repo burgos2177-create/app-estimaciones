@@ -450,6 +450,25 @@ export function buildResumenData(obra, estId) {
   const totalRecibidoCliente = anticipoRecibido + importePagado;
   const saldoCaja = totalRecibidoCliente - importeAcumEjecCIVA;
 
+  // Diferencia financiera "al corte de ESTA estimación": neto a cobrar acumulado
+  // considerando SOLO las estimaciones hasta esta (numero <= actual), menos los
+  // pagos de estimaciones previas y el saldo a favor por anticipo excedente. Es
+  // lo que cierra los números de esta estimación sin arrastrar lo que se lleve
+  // estimado en las siguientes. Se usa como monto sugerido del pago del cliente.
+  const numeroEsta = Number(est.numero) || 0;
+  const idsHastaEsta = Object.entries(obra.estimaciones || {})
+    .filter(([, e]) => (Number(e.numero) || 0) <= numeroEsta)
+    .map(([id]) => id);
+  const subtotalAcumHasta = idsHastaEsta.reduce((s, eid) => s + (subtotalPorEstim[eid] || 0), 0);
+  const ivaAcumHasta = idsHastaEsta.reduce((s, eid) => s + ivaDeEstim(eid), 0);
+  const amortizacionAcumHasta = subtotalAcumHasta * amortRate;
+  const netoAcumHasta = (subtotalAcumHasta + ivaAcumHasta) - amortizacionAcumHasta;
+  let pagosPrevios = 0;
+  for (const e of estims) {
+    if ((Number(e.numero) || 0) < numeroEsta && e.pagoCliente) pagosPrevios += Number(e.pagoCliente.importe) || 0;
+  }
+  const sugeridoPagoJusto = netoAcumHasta - pagosPrevios - excesoAnticipo;
+
   return {
     m, est, ivaPct, anticipoPct, rows, totalPpto, estims,
     subtotalEsta, ivaEsta, ivaAcum, ivaManual, importeEsta: importeEstaBruto,
@@ -462,7 +481,8 @@ export function buildResumenData(obra, estId) {
     diferenciaPct: netoAcum ? (netoAcum - abonosCliente) / netoAcum : 0,
     subtotalPagado, ivaPagado, importePagado,
     excesoAnticipo, abonosCliente,
-    anticipoRecibido, totalRecibidoCliente, saldoCaja
+    anticipoRecibido, totalRecibidoCliente, saldoCaja,
+    netoAcumHasta, amortizacionAcumHasta, pagosPrevios, sugeridoPagoJusto
   };
 }
 

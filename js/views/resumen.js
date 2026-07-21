@@ -54,7 +54,7 @@ async function draw(obraId, obra, estId) {
   const ests = obra.estimaciones || {};
   const estsArr = Object.entries(ests).map(([id, e]) => ({ id, ...e })).sort((a, b) => (a.numero || 0) - (b.numero || 0));
   const data = buildResumenData(obra, estId);
-  const { est, ivaPct, anticipoPct, rows, subtotalEsta, ivaEsta, ivaAcum, ivaManual, importeEsta, avPond, importeAcumEjec, importeAcumEjecCIVA, subtotalPagado, ivaPagado, importePagado, diferencia, diferenciaPct, anticipoMontoBase, amortizacionEsta, amortizacionAcum, saldoAnticipoPorAmortizar, netoEsta, netoAcum, anticipoRecibido, totalRecibidoCliente, saldoCaja, excesoAnticipo, abonosCliente } = data;
+  const { est, ivaPct, anticipoPct, rows, subtotalEsta, ivaEsta, ivaAcum, ivaManual, importeEsta, avPond, importeAcumEjec, importeAcumEjecCIVA, subtotalPagado, ivaPagado, importePagado, diferencia, diferenciaPct, anticipoMontoBase, amortizacionEsta, amortizacionAcum, saldoAnticipoPorAmortizar, netoEsta, netoAcum, anticipoRecibido, totalRecibidoCliente, saldoCaja, excesoAnticipo, abonosCliente, sugeridoPagoJusto, amortizacionAcumHasta, netoAcumHasta, pagosPrevios } = data;
 
   const estSel = h('select', { onchange: e => { draw(obraId, obra, e.target.value); } },
     estsArr.map(es => h('option', { value: es.id, selected: es.id === estId }, `Estimación #${es.numero}`)));
@@ -73,7 +73,7 @@ async function draw(obraId, obra, estId) {
   const editable = est.estado === 'borrador' || state.user.role === 'admin';
   const bloqueado = buzonEstado === 'aprobado' || buzonEstado === 'cobrado' || buzonEstado === 'pagado';
   const editPagosBtn = editable
-    ? h('button', { class: 'btn sm ghost', onClick: async () => { const ok = await editPagoDialog(obraId, estId, est, ivaPct, { subtotalEsta, ivaEsta }); if (ok) renderResumen({ params: { id: obraId } }); } },
+    ? h('button', { class: 'btn sm ghost', onClick: async () => { const ok = await editPagoDialog(obraId, estId, est, ivaPct, { subtotalEsta, ivaEsta, sugeridoPagoJusto, netoAcumHasta, pagosPrevios, excesoAnticipo }); if (ok) renderResumen({ params: { id: obraId } }); } },
       bloqueado ? '🔒 Ver pago' : '💵 Registrar / enviar pago')
     : null;
   const badge = buzonBadge(buzonEstado, buzonItem);
@@ -339,64 +339,51 @@ async function editPagoDialog(obraId, estId, est, ivaPct, recon = {}) {
     return false;
   }
 
-  // Montos RECONCILIADOS de la estimación (subtotal ejecutado + IVA manual/auto).
-  const reconImporte = reconSub + reconIva;
+  // Subtotal + IVA = lo que se FACTURA (fiscal). El NETO a cobrar es la diferencia
+  // financiera al corte de ESTA estimación: neto amortizado acumulado hasta esta,
+  // menos pagos previos y el saldo a favor por anticipo excedente. Eso es lo que el
+  // cliente transfiere; el importe bruto NO, porque no está amortizado.
+  const reconBruto = reconSub + reconIva;
   const ivaEsManual = est.ivaMonto != null && est.ivaMonto !== '';
+  const netoSugerido = Number.isFinite(Number(recon.sugeridoPagoJusto)) ? Number(recon.sugeridoPagoJusto) : reconBruto;
+  const netoHasta = Number(recon.netoAcumHasta) || 0;
+  const pagosPrev = Number(recon.pagosPrevios) || 0;
+  const exceso = Number(recon.excesoAnticipo) || 0;
 
-  // Estado de partida: si ya había un pago cuyo importe difiere de lo estimado,
-  // arrancamos en "otro monto" con esos valores; si no, en "justo".
+  // Estado inicial: si ya había un pago cuyo importe difiere del neto sugerido,
+  // arrancamos en "otro monto"; si no, en "justo".
   const prev = est.pagoCliente || null;
-  const difiere = prev && Math.abs((Number(prev.importe) || 0) - reconImporte) > 0.01;
+  const difiere = prev && Math.abs((Number(prev.importe) || 0) - netoSugerido) > 0.01;
   const startJusto = !prev || !difiere;
-  const cur = prev || { subtotal: reconSub, iva: reconIva, importe: reconImporte, fecha: Date.now() };
 
-  const subtotalIn = h('input', { type: 'number', step: '0.01', value: cur.subtotal || '' });
-  const ivaIn = h('input', { type: 'number', step: '0.01', value: cur.iva || '' });
-  const importeIn = h('input', { type: 'number', step: '0.01', value: cur.importe || '' });
-  const fechaIn = h('input', { type: 'date', value: cur.fecha ? new Date(cur.fecha).toISOString().slice(0, 10) : new Date().toISOString().slice(0, 10) });
+  const importeIn = h('input', { type: 'number', step: '0.01',
+    value: (startJusto ? netoSugerido : (Number(prev.importe) || netoSugerido)).toFixed(2) });
+  const fechaIn = h('input', { type: 'date',
+    value: prev?.fecha ? new Date(prev.fecha).toISOString().slice(0, 10) : new Date().toISOString().slice(0, 10) });
 
-  function syncFromSubtotal() {
-    const s = Number(subtotalIn.value) || 0;
-    const ivaFijo = ivaEsManual ? Number(est.ivaMonto) : null;
-    const iva = ivaFijo != null ? ivaFijo : s * ivaPct;
-    ivaIn.value = iva.toFixed(2);
-    importeIn.value = (s + iva).toFixed(2);
-  }
-  function syncFromImporte() {
-    const i = Number(importeIn.value) || 0;
-    const s = i / (1 + ivaPct);
-    subtotalIn.value = s.toFixed(2);
-    ivaIn.value = (s * ivaPct).toFixed(2);
-  }
-  subtotalIn.addEventListener('input', syncFromSubtotal);
-  importeIn.addEventListener('input', syncFromImporte);
-
-  // ¿Pagó justo lo estimado, o un monto distinto?
+  // ¿Pagó el neto justo, o un monto distinto?
   const rJusto = h('input', { type: 'radio', name: 'pago-modo', checked: startJusto });
   const rOtro  = h('input', { type: 'radio', name: 'pago-modo', checked: !startJusto });
-  const montosWrap = h('div', { style: { marginTop: '10px', transition: 'opacity .15s' } }, [
-    h('div', { class: 'grid-2' }, [
-      h('div', { class: 'field' }, [h('label', {}, 'Subtotal'), subtotalIn]),
-      h('div', { class: 'field' }, [h('label', {}, ivaEsManual ? 'IVA (manual)' : 'IVA (auto)'), ivaIn])
-    ]),
-    h('div', { class: 'grid-2', style: { marginTop: '10px' } }, [
-      h('div', { class: 'field' }, [h('label', {}, 'Importe (con IVA)'), importeIn]),
-      h('div', { class: 'field' }, [h('label', {}, 'Fecha del pago'), fechaIn])
-    ])
-  ]);
-  // En modo "justo" bloqueamos los montos y los fijamos a lo estimado (la fecha
-  // sigue editable). En "otro monto" se habilitan para capturar lo que pagó.
   function setModo(justo) {
-    [subtotalIn, ivaIn, importeIn].forEach(inp => { inp.disabled = justo; });
-    montosWrap.style.opacity = justo ? '0.55' : '1';
-    if (justo) {
-      subtotalIn.value = reconSub.toFixed(2);
-      ivaIn.value = reconIva.toFixed(2);
-      importeIn.value = reconImporte.toFixed(2);
-    }
+    importeIn.disabled = justo;
+    importeIn.style.opacity = justo ? '0.7' : '1';
+    if (justo) importeIn.value = netoSugerido.toFixed(2);
   }
   rJusto.addEventListener('change', () => setModo(true));
   rOtro.addEventListener('change', () => setModo(false));
+
+  // Desglose de cómo se forma el neto sugerido (para cerrar números).
+  const desgloseRows = [
+    ['Neto a cobrar acumulado (hasta esta estim.)', money(netoHasta)]
+  ];
+  if (pagosPrev) desgloseRows.push(['− Pagos de estimaciones previas', '-' + money(pagosPrev)]);
+  if (exceso)    desgloseRows.push([exceso > 0 ? '− Saldo a favor (anticipo excedente)' : '+ Anticipo faltante', (exceso > 0 ? '-' : '+') + money(Math.abs(exceso))]);
+  const desglose = h('div', { style: { marginTop: '8px', fontSize: '12px' } }, [
+    ...desgloseRows.map(([k, v]) => h('div', { class: 'row', style: { justifyContent: 'space-between', color: 'var(--muted)' } }, [h('span', {}, k), h('span', { class: 'mono' }, v)])),
+    h('div', { class: 'row', style: { justifyContent: 'space-between', fontWeight: 600, borderTop: '1px solid var(--border)', marginTop: '4px', paddingTop: '4px' } }, [
+      h('span', {}, 'Neto a cobrar de esta estimación'), h('span', { class: 'mono', style: { color: 'var(--accent)' } }, money(netoSugerido))
+    ])
+  ]);
 
   // Método de pago (Efectivo / Transferencia). Default: transferencia.
   const prevMetodo = prev?.metodoPago || 'transferencia';
@@ -410,15 +397,25 @@ async function editPagoDialog(obraId, estId, est, ivaPct, recon = {}) {
       ' Debe coincidir con el IVA que se le cobra al cliente.'
     ]),
 
-    h('h3', { style: { margin: '6px 0 6px', fontSize: '14px' } }, '¿Cuánto pagó el cliente?'),
+    // Referencia fiscal de la estimación (lo facturado).
+    h('div', { class: 'grid-2', style: { margin: '4px 0 6px' } }, [
+      h('div', { class: 'field' }, [h('label', {}, 'Subtotal (facturado)'), h('div', { class: 'mono' }, money(reconSub))]),
+      h('div', { class: 'field' }, [h('label', {}, ivaEsManual ? 'IVA (manual)' : 'IVA'), h('div', { class: 'mono' }, money(reconIva))])
+    ]),
+    desglose,
+
+    h('h3', { style: { margin: '14px 0 6px', fontSize: '14px' } }, '¿Cuánto pagó el cliente?'),
     h('label', { class: 'row', style: { padding: '4px 0', cursor: 'pointer' } }, [
-      rJusto, h('span', {}, ['Justo lo estimado — ', h('b', {}, money(reconImporte)),
-        h('span', { class: 'muted' }, ` (subtotal ${money(reconSub)} + IVA ${money(reconIva)})`)])
+      rJusto, h('span', {}, ['Justo lo que corresponde — ', h('b', {}, money(netoSugerido)),
+        h('span', { class: 'muted' }, ' (neto ya amortizado)')])
     ]),
     h('label', { class: 'row', style: { padding: '4px 0', cursor: 'pointer' } }, [
       rOtro, h('span', {}, 'Pagó otro monto (capturar abajo)')
     ]),
-    montosWrap,
+    h('div', { class: 'grid-2', style: { marginTop: '8px' } }, [
+      h('div', { class: 'field' }, [h('label', {}, 'Neto pagado'), importeIn]),
+      h('div', { class: 'field' }, [h('label', {}, 'Fecha del pago'), fechaIn])
+    ]),
 
     h('h3', { style: { margin: '14px 0 6px', fontSize: '14px' } }, 'Método de pago'),
     h('label', { class: 'row', style: { padding: '4px 0', cursor: 'pointer' } }, [mTransfer, h('span', {}, '🏦 Transferencia')]),
@@ -433,8 +430,10 @@ async function editPagoDialog(obraId, estId, est, ivaPct, recon = {}) {
     onConfirm: async () => {
       try {
         const pago = {
-          subtotal: Number(subtotalIn.value) || 0,
-          iva: Number(ivaIn.value) || 0,
+          // Subtotal e IVA = fiscal de la estimación (lo facturado, va al contador).
+          subtotal: reconSub,
+          iva: reconIva,
+          // Importe = NETO efectivamente cobrado (ya amortizado / con saldo a favor).
           importe: Number(importeIn.value) || 0,
           fecha: fechaIn.value ? new Date(fechaIn.value).getTime() : Date.now(),
           metodoPago: mEfectivo.checked ? 'efectivo' : 'transferencia',
