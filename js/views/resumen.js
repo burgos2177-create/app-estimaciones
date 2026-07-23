@@ -137,10 +137,17 @@ async function draw(obraId, obra, estId) {
   const editIvaBtn = editable
     ? h('button', { class: 'btn sm ghost', onClick: async () => { const ok = await editIvaDialog(obraId, estId, est); if (ok) renderResumen({ params: { id: obraId } }); } }, '✎ IVA')
     : null;
+  // Trazabilidad del IVA: si ESTA estimación quedó en 16% auto pero OTRA se capturó
+  // manual, avisa (fácil olvidar ajustarla y descuadrar el IVA acumulado).
+  const otrasManual = Object.entries(ests).filter(([id, e]) => id !== estId && e.ivaMonto != null && e.ivaMonto !== '').map(([, e]) => e.numero);
+  const avisoIvaAuto = (!ivaManual && otrasManual.length)
+    ? h('span', { class: 'tag warn', title: `La(s) estimación(es) #${otrasManual.join(', #')} tienen IVA manual, y esta está en 16% automático. Ajústala con ✎ IVA para no reportar IVA de más.` }, `⚠ IVA en 16% (la #${otrasManual.join('/#')} fue manual)`)
+    : null;
   const estadoCuenta = h('div', { class: 'card' }, [
     h('div', { class: 'row', style: { marginBottom: '10px' } }, [
       h('h3', { style: { margin: 0 } }, 'Estado de cuenta'),
       h('div', { style: { flex: 1 } }),
+      avisoIvaAuto,
       ivaManual
         ? h('span', { class: 'tag ok', title: 'El IVA de esta estimación se capturó como monto manual (no 16% sobre todo)' }, `IVA manual: ${money(ivaEsta)}`)
         : h('span', { class: 'tag muted', title: 'IVA automático (16% del subtotal). Edítalo para poner solo el IVA de materiales gravados.' }, `IVA 16% auto`),
