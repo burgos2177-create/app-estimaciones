@@ -962,21 +962,32 @@ function appendMemoriaGeneradores(doc, obra, estId, m) {
     y += 36;
 
     if (cols && cols.length && (gen.partidas || []).length) {
-      const head = [[...cols.map(col => col.label), 'Parcial']];
+      // Columna de Observaciones solo si alguna partida trae texto (evita columna vacía).
+      const hasObs = (gen.partidas || []).some(p => p.observaciones && String(p.observaciones).trim());
+      const trail = hasObs ? [''] : [];
+      const head = [[...cols.map(col => col.label), 'Parcial', ...(hasObs ? ['Observaciones'] : [])]];
       const body = (gen.partidas || []).map(p => [
         ...cols.map(col => (p[col.key] != null && p[col.key] !== '')
           ? (col.type === 'number' ? num2(p[col.key]) : String(p[col.key]))
           : ''),
-        num2(calcPartidaTotal(c, p))
+        num2(calcPartidaTotal(c, p)),
+        ...(hasObs ? [p.observaciones || ''] : [])
       ]);
       const foot = [];
       for (const a of (gen.ajustes || [])) {
-        foot.push([{ content: `Ajuste: ${a.etiqueta || ''}`, colSpan: cols.length, styles: { halign: 'right', fontStyle: 'italic' } }, num2(a.cantidad)]);
+        foot.push([{ content: `Ajuste: ${a.etiqueta || ''}`, colSpan: cols.length, styles: { halign: 'right', fontStyle: 'italic' } }, num2(a.cantidad), ...trail]);
       }
-      foot.push([{ content: 'TOTAL EJECUTADO', colSpan: cols.length, styles: { halign: 'right', fontStyle: 'bold' } }, { content: num2(total), styles: { fontStyle: 'bold' } }]);
+      foot.push([{ content: 'TOTAL EJECUTADO', colSpan: cols.length, styles: { halign: 'right', fontStyle: 'bold' } }, { content: num2(total), styles: { fontStyle: 'bold' } }, ...trail]);
 
-      const colStyles = cols.reduce((acc, col, i) => { if (col.type === 'number') acc[i] = { halign: 'right' }; return acc; }, {});
-      colStyles[cols.length] = { halign: 'right', fontStyle: 'bold' };
+      // Columnas esbeltas: números (largo/ancho/alto) angostos; con Observaciones,
+      // eje/tramo también fijos para que el texto tome el ancho restante.
+      const colStyles = {};
+      cols.forEach((col, i) => {
+        if (col.type === 'number') colStyles[i] = { halign: 'right', cellWidth: 46 };
+        else if (hasObs && (col.key === 'eje' || col.key === 'tramo')) colStyles[i] = { cellWidth: 50 };
+      });
+      colStyles[cols.length] = { halign: 'right', fontStyle: 'bold', cellWidth: 52 };
+      if (hasObs) colStyles[cols.length + 1] = { halign: 'left', textColor: [90, 90, 90] };
 
       doc.autoTable({
         startY: y,
