@@ -230,7 +230,10 @@ export async function renderSubEstimacion({ params }) {
         badge
       ]),
       h('div', { style: { flex: 1 } }),
-      editable && editPagoBtn
+      // El pago se puede registrar/enviar aunque la estimación esté CERRADA: se
+      // cierra para dejar los números finales y luego se paga al sub. Solo se
+      // bloquea (a solo lectura) si el contador ya lo aprobó en bitácora.
+      editPagoBtn
     ])
   ]);
 
@@ -245,7 +248,7 @@ export async function renderSubEstimacion({ params }) {
   async function cerrarConfirm() {
     await modal({
       title: 'Cerrar estimación del sub',
-      body: h('div', {}, 'Una vez cerrada, no se podrán modificar avances ni el pago al sub.'),
+      body: h('div', {}, 'Una vez cerrada, no se podrán modificar los avances. El pago al sub sí se puede registrar y enviar al contador después de cerrar.'),
       confirmLabel: 'Cerrar',
       onConfirm: async () => { await cerrarSubEstimacion(obraId, subId, eid, state.user.uid); toast('Cerrada', 'ok'); dispatch(); return true; }
     });

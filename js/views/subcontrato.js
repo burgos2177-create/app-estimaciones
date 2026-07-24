@@ -1142,7 +1142,7 @@ async function newSubEstimDialog(obraId, subId, ests) {
 async function cerrarSubEstConfirm(obraId, subId, eid, num) {
   await modal({
     title: `Cerrar estimación del sub #${num}`,
-    body: h('div', {}, 'Una vez cerrada, no se podrán modificar avances ni el pago al sub. El admin puede reabrirla.'),
+    body: h('div', {}, 'Una vez cerrada, no se podrán modificar los avances (el pago al sub sí se puede registrar después). El admin puede reabrirla.'),
     confirmLabel: 'Cerrar',
     onConfirm: async () => { await cerrarSubEstimacion(obraId, subId, eid, state.user.uid); toast('Cerrada', 'ok'); dispatch(); return true; }
   });
