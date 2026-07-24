@@ -689,6 +689,12 @@ export async function createSubEstimacion(obraId, subId, data) {
 export async function setSubEstimacionAvance(obraId, subId, estId, conceptoId, cantidad) {
   await set(_ref(`obras/${obraId}/subcontratos/${subId}/estimaciones/${estId}/avances/${conceptoId}`), Number(cantidad) || 0);
 }
+// Modo de IVA de la estimación al subcontratista: true = con IVA (16%),
+// false = sin IVA (el importe es neto; el sub no factura). Afecta el resumen,
+// el importe a pagar y el default del diálogo de pago.
+export async function setSubEstimacionConIva(obraId, subId, estId, conIva) {
+  await set(_ref(`obras/${obraId}/subcontratos/${subId}/estimaciones/${estId}/conIva`), conIva !== false);
+}
 export async function cerrarSubEstimacion(obraId, subId, estId, uid) {
   await update(_ref(`obras/${obraId}/subcontratos/${subId}/estimaciones/${estId}`), {
     estado: 'cerrada', cerradaAt: Date.now(), cerradaPor: uid

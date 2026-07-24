@@ -3,7 +3,7 @@
 
 import { h, modal, toast, buzonBadge } from '../util/dom.js';
 import { renderShell } from './shell.js';
-import { rread, loadObra, buildConceptosLookup, setSubEstimacionAvance, setPagoSub,
+import { rread, loadObra, buildConceptosLookup, setSubEstimacionAvance, setSubEstimacionConIva, setPagoSub,
          cerrarSubEstimacion, reabrirSubEstimacion,
          getObraLinks, listBuzonItems, pushBuzonItem, updateBuzonItem } from '../services/db.js';
 import { state } from '../state/store.js';
@@ -32,6 +32,9 @@ export async function renderSubEstimacion({ params }) {
   }
   const ivaPct = Number(m.ivaPct ?? 0.16);
   const editable = est.estado === 'borrador';
+  // Modo de IVA de ESTA estimación al sub: con IVA (16%) o sin IVA (importe neto,
+  // el sub no factura). Default: con IVA (comportamiento histórico).
+  let estConIva = est.conIva !== false;
 
   // Calcular acumulados de TODAS las estimaciones cerradas + esta
   const ests = sub.estimaciones || {};
@@ -64,6 +67,13 @@ export async function renderSubEstimacion({ params }) {
   const summarySub = h('span', { class: 'mono', style: { fontSize: '20px', fontWeight: 600 } }, '$0.00');
   const summaryIva = h('span', { class: 'mono muted' }, '$0.00');
   const summaryImp = h('span', { class: 'mono', style: { fontSize: '24px', fontWeight: 700, color: 'var(--accent)' } }, '$0.00');
+  // Etiquetas dinámicas según el modo de IVA de la estimación
+  const ivaLabelNode = h('label', {}, '');
+  const importeLabelNode = h('label', {}, '');
+  function refreshIvaLabels() {
+    ivaLabelNode.textContent = estConIva ? `IVA (${pct(ivaPct)})` : 'IVA (no aplica)';
+    importeLabelNode.textContent = estConIva ? 'Importe (c/IVA)' : 'Importe (neto)';
+  }
 
   // Tabla editable
   const totalsRow = h('tr', { style: { fontWeight: 600, background: 'var(--bg-2)' } });
@@ -74,7 +84,7 @@ export async function renderSubEstimacion({ params }) {
       const p = Number(ganador.precios?.[cs.conceptoId]) || 0;
       subtotal += cant * p;
     }
-    const iva = subtotal * ivaPct;
+    const iva = estConIva ? subtotal * ivaPct : 0;
     const importe = subtotal + iva;
     totalsRow.innerHTML = '';
     totalsRow.appendChild(h('td', { colSpan: 5 }, 'TOTAL'));
@@ -172,16 +182,44 @@ export async function renderSubEstimacion({ params }) {
 
   const badge = buzonBadge(buzonEstado, buzonItem);
 
+  // Toggle Con/Sin IVA de la estimación (solo si es editable). Sin IVA = el
+  // importe es neto (el sub no factura).
+  const btnConIva = h('button', { class: 'btn sm', type: 'button' }, `Con IVA (${pct(ivaPct)})`);
+  const btnSinIva = h('button', { class: 'btn sm', type: 'button' }, 'Sin IVA');
+  function refreshIvaToggle() {
+    btnConIva.className = 'btn sm' + (estConIva ? ' primary' : ' ghost');
+    btnSinIva.className = 'btn sm' + (!estConIva ? ' primary' : ' ghost');
+  }
+  async function setIvaMode(v) {
+    if (estConIva === v) return;
+    estConIva = v;
+    refreshIvaToggle(); refreshIvaLabels(); recompute();
+    try { await setSubEstimacionConIva(obraId, subId, eid, v); }
+    catch (err) { toast('Error: ' + err.message, 'danger'); }
+  }
+  btnConIva.addEventListener('click', () => setIvaMode(true));
+  btnSinIva.addEventListener('click', () => setIvaMode(false));
+  refreshIvaToggle(); refreshIvaLabels();
+
+  const ivaModeRow = h('div', { class: 'row', style: { marginTop: '14px', paddingTop: '12px', borderTop: '1px solid var(--border)', alignItems: 'center', gap: '10px' } }, [
+    h('span', { class: 'muted', style: { fontSize: '12px' } }, 'IVA de la estimación:'),
+    editable
+      ? h('div', { class: 'row', style: { gap: '6px' } }, [btnConIva, btnSinIva])
+      : h('span', { class: 'tag ' + (estConIva ? 'muted' : 'warn') }, estConIva ? `Con IVA (${pct(ivaPct)})` : 'Sin IVA (neto)'),
+    h('span', { class: 'muted', style: { fontSize: '11px' } }, estConIva ? '' : '· El sub no factura; el importe es lo neto a pagarle.')
+  ]);
+
   const summary = h('div', { class: 'card' }, [
     h('div', { class: 'grid-3' }, [
       kvRow('Subcontratista', ganador.nombre),
       kvRow('Período', `${dateMx(est.periodoIni)} – ${dateMx(est.periodoFin)}`),
       kvRow('Fecha de corte', dateMx(est.fechaCorte))
     ]),
+    ivaModeRow,
     h('div', { class: 'grid-3', style: { marginTop: '14px', paddingTop: '12px', borderTop: '1px solid var(--border)' } }, [
       kvBig('Subtotal a pagar', summarySub),
-      kvBig('IVA (' + pct(ivaPct) + ')', summaryIva),
-      kvBig('Importe (c/IVA)', summaryImp, true)
+      h('div', { class: 'field' }, [ivaLabelNode, h('div', {}, summaryIva)]),
+      h('div', { class: 'field' }, [importeLabelNode, h('div', {}, summaryImp)])
     ]),
     h('div', { class: 'row', style: { marginTop: '14px', paddingTop: '12px', borderTop: '1px solid var(--border)' } }, [
       h('div', {}, [
@@ -262,8 +300,8 @@ export async function renderSubEstimacion({ params }) {
     const ivaCalc = subtotalCalc * ivaPct;
     const importeCalc = subtotalCalc + ivaCalc;
 
-    const cur = est.pagoSub || { subtotal: 0, iva: 0, importe: 0, fecha: Date.now(), conIva: true };
-    // Si no hay flag persistida, default es "con IVA" (el comportamiento histórico)
+    const cur = est.pagoSub || { subtotal: 0, iva: 0, importe: 0, fecha: Date.now(), conIva: estConIva };
+    // Default del pago: sigue el modo de IVA de la estimación (con/sin IVA)
     let conIva = cur.conIva !== false;
 
     const radioConIva = h('input', { type: 'radio', name: 'pago-iva', value: 'con', checked: conIva });

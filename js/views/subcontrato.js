@@ -1051,8 +1051,9 @@ function renderSubEstimaciones(obraId, subId, sub, conceptosAll, conceptosSub, o
       const p = Number(ganador?.precios?.[cs.conceptoId]) || 0;
       subtotal += cant * p;
     }
-    const iva = subtotal * ivaPct;
-    totalsByEst[eid] = { subtotal, iva, importe: subtotal + iva, pago: est.pagoSub };
+    const conIva = est.conIva !== false;
+    const iva = conIva ? subtotal * ivaPct : 0;
+    totalsByEst[eid] = { subtotal, iva, importe: subtotal + iva, conIva, pago: est.pagoSub };
   }
 
   const table = h('table', { class: 'tbl' }, [
@@ -1070,7 +1071,7 @@ function renderSubEstimaciones(obraId, subId, sub, conceptosAll, conceptosSub, o
         h('td', {}, [e.periodoIni ? dateMx(e.periodoIni) : '—', ' – ', e.periodoFin ? dateMx(e.periodoFin) : '—']),
         h('td', {}, e.estado === 'cerrada' ? h('span', { class: 'tag ok' }, '🔒 Cerrada') : h('span', { class: 'tag warn' }, '✎ Borrador')),
         h('td', { class: 'num' }, money(t.subtotal)),
-        h('td', { class: 'num muted' }, money(t.iva)),
+        h('td', { class: 'num muted', title: t.conIva ? '' : 'Sin IVA (importe neto)' }, t.conIva ? money(t.iva) : '—'),
         h('td', { class: 'num' }, h('b', {}, money(t.importe))),
         h('td', { class: 'num' }, t.pago ? money(t.pago.importe) : h('span', { class: 'muted' }, '—')),
         h('td', { onClick: e2 => e2.stopPropagation() }, h('div', { class: 'row' }, [
