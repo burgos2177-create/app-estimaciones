@@ -113,7 +113,7 @@ input[disabled], select[disabled], textarea[disabled] { opacity: .55; cursor: no
 /* ========== tables ========== */
 .tbl { width: 100%; border-collapse: collapse; font-size: 13px; }
 .tbl th, .tbl td { padding: 8px 10px; text-align: left; border-bottom: 1px solid var(--border); }
-.tbl th { font-weight: 600; color: var(--text-1); background: var(--bg-2); position: sticky; top: 0; z-index: 1; font-size: 12px; text-transform: uppercase; letter-spacing: .3px; }
+.tbl th { font-weight: 600; color: var(--text-1); background: var(--bg-2); position: sticky; top: 0; z-index: 2; font-size: 12px; text-transform: uppercase; letter-spacing: .3px; box-shadow: inset 0 -1px 0 var(--border); }
 .tbl tbody tr:hover { background: var(--bg-2); }
 .tbl td.num, .tbl th.num { text-align: right; font-family: var(--mono); }
 .tbl .warn { color: var(--warn); }

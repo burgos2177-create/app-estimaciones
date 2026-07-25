@@ -162,7 +162,9 @@ export async function renderF1({ params }) {
       h('button', { class: 'btn primary', onClick: () => exportF1Pdf(obra) }, '⬇ PDF')
     ]),
     summary,
-    h('div', { class: 'card', style: { overflowX: 'auto' } }, tbl)
+    // Contenedor con scroll propio (H y V) y altura acotada: así el thead sticky
+    // se ancla al tope de la tabla y los encabezados siguen visibles al bajar.
+    h('div', { class: 'card', style: { padding: 0, overflow: 'auto', maxHeight: 'calc(100vh - 240px)', minHeight: '320px' } }, tbl)
   ]));
 }
 
