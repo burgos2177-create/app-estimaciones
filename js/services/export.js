@@ -225,8 +225,7 @@ export function exportF1Pdf(obra) {
     },
     didParseCell: (data) => {
       if (data.section !== 'body') return;
-      const row = body[data.row.index];
-      if (row?._overrun && data.column.index >= 6) data.cell.styles.fillColor = [253, 245, 220];
+      // Nota: la sobreejecución NO se resalta en el PDF (a diferencia de la app).
       if (data.column.index >= 7 + estims.length) data.cell.styles.halign = 'right';
       if (data.column.index >= 6 && data.column.index < 6 + estims.length) data.cell.styles.halign = 'right';
     },
@@ -782,11 +781,7 @@ export async function exportResumenPdf(obra, estId, cfg = {}) {
       3: { halign: 'right' }, 4: { halign: 'right' }, 5: { halign: 'right' },
       6: { halign: 'right' }, 7: { halign: 'right' }, 8: { halign: 'right' }, 9: { halign: 'right' }
     },
-    didParseCell: (d) => {
-      if (d.section !== 'body') return;
-      const r = rows[d.row.index];
-      if (r?.c?.cantidad && r.totalAcum > r.c.cantidad && d.column.index >= 6) d.cell.styles.fillColor = [253, 245, 220];
-    },
+    // Nota: la sobreejecución NO se resalta en el PDF (a diferencia de la app).
     margin: { left: 30, right: 30, bottom: 90 },
     didDrawPage: (data) => drawFooter(doc, data, m)
   });
