@@ -1,9 +1,9 @@
 import { h, mount, toast, modal } from '../util/dom.js';
 import { renderShell } from './shell.js';
-import { loadObra, getConceptoById, saveGenerador, addGeneradorAttachment, removeGeneradorAttachment, deleteGenerador } from '../services/db.js';
+import { loadObra, getConceptoById, saveGenerador, addGeneradorAttachment, removeGeneradorAttachment, deleteGenerador, resolveConceptoKeyLocal } from '../services/db.js';
 import { state } from '../state/store.js';
 import { navigate } from '../state/router.js';
-import { money, num, num0, dateMx } from '../util/format.js';
+import { money, num, num0, dateMx, pct } from '../util/format.js';
 import { getColumns, getCalcFn, calcGeneradorTotal, blankPartida, PLANTILLAS } from '../services/plantillas.js';
 import { pickPlantillaDialog } from './estimacion.js';
 import { initDrive, isConfigured as driveConfigured, isSignedIn as driveSignedIn, signIn as driveSignIn,
@@ -31,6 +31,31 @@ export async function renderGenerador({ params }) {
   const columns = getColumns(concepto) || [];
   const calc = getCalcFn(concepto);
 
+  // Ejecutado del MISMO concepto en las DEMÁS estimaciones/generadores (sin este),
+  // para mostrar cuánto se lleva y cuánto llevará al sumar lo de este generador.
+  // Se calcula igual que el concentrado: por estimación, generador manda sobre el
+  // avance directo (avances) para no doble-contar.
+  const conceptoKey = resolveConceptoKeyLocal(obra, gen.conceptoId);
+  const cantContratada = Number(concepto.cantidad) || 0;
+  const ejecPrevio = (() => {
+    const byEst = {};
+    for (const [id, g] of Object.entries(obra.generadores || {})) {
+      if (id === gid) continue;
+      if (resolveConceptoKeyLocal(obra, g.conceptoId) !== conceptoKey) continue;
+      const q = g.totalEjecutado != null ? Number(g.totalEjecutado) : calcGeneradorTotal(concepto, g);
+      byEst[g.estimacionId] = (byEst[g.estimacionId] || 0) + q;
+    }
+    for (const [cid, byEstAv] of Object.entries(obra.avances || {})) {
+      if (resolveConceptoKeyLocal(obra, cid) !== conceptoKey) continue;
+      for (const [eid, cant] of Object.entries(byEstAv || {})) {
+        if (byEst[eid] != null) continue;   // ya cubierto por un generador
+        byEst[eid] = Number(cant) || 0;
+      }
+    }
+    return Object.values(byEst).reduce((s, x) => s + x, 0);
+  })();
+  const previoPct = cantContratada ? ejecPrevio / cantContratada : 0;
+
   // estado local del editor (no se persiste hasta guardar)
   const work = {
     partidas: deepClone(gen.partidas || []),
@@ -53,6 +78,10 @@ export async function renderGenerador({ params }) {
   const totalDisplay = h('span', { class: 'mono', style: { fontWeight: 700 } }, '0');
   const importeDisplay = h('span', { class: 'mono muted' }, money(0));
   const overrunBadge = h('span', {}, '');
+  // Acumulado del concepto (previo + este generador), en cantidad y %, se refresca en vivo.
+  const conEsteCantNode = h('span', { class: 'mono', style: { fontWeight: 600 } }, num(ejecPrevio, 2));
+  const conEstePctNode = h('span', { class: 'muted', style: { marginLeft: '6px' } }, '');
+  const restanteNode = h('span', { class: 'mono' }, num(Math.max(cantContratada - ejecPrevio, 0), 2));
 
   function recompute() {
     const total = calc ? work.partidas.reduce((s, p) => s + (calc(p) || 0), 0) : 0;
@@ -64,6 +93,17 @@ export async function renderGenerador({ params }) {
     if (concepto.cantidad && grand > concepto.cantidad) {
       overrunBadge.appendChild(h('span', { class: 'tag warn' }, `⚠ Sobreejecución: ${num(grand - concepto.cantidad, 2)} ${concepto.unidad || ''} arriba del contrato`));
     }
+    // Acumulado del concepto con lo de este generador
+    const conEste = ejecPrevio + grand;
+    const conEstePct = cantContratada ? conEste / cantContratada : 0;
+    const sobre = cantContratada && conEste > cantContratada;
+    conEsteCantNode.textContent = num(conEste, 2);
+    conEsteCantNode.style.color = sobre ? 'var(--warn)' : '';
+    conEstePctNode.textContent = cantContratada ? pct(conEstePct) : '—';
+    conEstePctNode.style.color = sobre ? 'var(--warn)' : '';
+    const restante = cantContratada - conEste;
+    restanteNode.textContent = num(restante, 2);
+    restanteNode.style.color = restante < 0 ? 'var(--warn)' : '';
   }
 
   // Cambiar la plantilla de medición del concepto (corrige una asignación errónea).
@@ -119,6 +159,23 @@ export async function renderGenerador({ params }) {
       kv('Unidad', concepto.unidad),
       kv('Cantidad contratada', num(concepto.cantidad, 2)),
       kv('P.U.', money(concepto.precio_unitario))
+    ]),
+    // Avance del concepto: lo ejecutado en otras estimaciones y lo que llevará al
+    // sumar este generador (cantidad y % sobre lo contratado).
+    h('div', { class: 'grid-3', style: { marginTop: '10px', paddingTop: '10px', borderTop: '1px solid var(--border)' } }, [
+      h('div', { class: 'field' }, [
+        h('label', {}, 'Ejecutado previo (otras estim.)'),
+        h('div', {}, [h('span', { class: 'mono' }, num(ejecPrevio, 2)), ' ', h('span', { class: 'muted' }, concepto.unidad || ''),
+          h('span', { class: 'muted', style: { marginLeft: '6px' } }, cantContratada ? `(${pct(previoPct)})` : '')])
+      ]),
+      h('div', { class: 'field' }, [
+        h('label', {}, 'Acumulado con este generador'),
+        h('div', {}, [conEsteCantNode, ' ', h('span', { class: 'muted' }, concepto.unidad || ''), conEstePctNode])
+      ]),
+      h('div', { class: 'field' }, [
+        h('label', {}, 'Restante del concepto'),
+        h('div', {}, [restanteNode, ' ', h('span', { class: 'muted' }, concepto.unidad || '')])
+      ])
     ])
   ]);
 
