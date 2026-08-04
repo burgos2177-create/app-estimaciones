@@ -513,6 +513,27 @@ export async function getProyectosBitacora() {
   return Array.isArray(arr) ? arr : Object.values(arr);
 }
 
+// Estado operativo de cada obra ('activo' | 'pausa' | 'terminado').
+//
+// Aquí NO se guarda estado: la fuente única es el proyecto contable de
+// bitácora, que se administra desde la consola de la suite. Se resuelve
+// obra → proyecto con /shared/obraLinks y de ahí se lee `estado`.
+//
+// Devuelve { [obraId]: estado }. Una obra sin vínculo o cuyo proyecto no
+// tenga estado simplemente NO aparece en el mapa: el llamador debe tratar
+// la ausencia como "activa" para no esconder obras recién creadas.
+export async function getEstadoObras() {
+  const [links, proyectos] = await Promise.all([getObraLinks(), getProyectosBitacora()]);
+  const porId = {};
+  proyectos.forEach(p => { if (p && p.id != null) porId[String(p.id)] = p; });
+  const out = {};
+  for (const [obraId, proyectoId] of Object.entries(links)) {
+    const estado = porId[String(proyectoId)]?.estado;
+    if (estado) out[obraId] = estado;
+  }
+  return out;
+}
+
 // === Buzón cross-app ===
 // /shared/buzon/{itemId}: { tipo, origenApp, obraId, proyectoId, ..., estado }
 export async function pushBuzonItem(item) {
