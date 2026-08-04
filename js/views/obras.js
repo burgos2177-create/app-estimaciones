@@ -7,10 +7,12 @@ import { money, dateMx, pct } from '../util/format.js';
 import { modal, toast } from '../util/dom.js';
 import { buildIntegracionForm } from './integracion-form.js';
 
-// Estados del proyecto contable que sacan a la obra del listado. La obra sigue
-// existiendo y su URL /obras/{id} sigue funcionando; sólo deja de estorbar en
-// el día a día. Se administra desde la consola de la suite (no desde aquí).
-const ESTADOS_OCULTOS = ['pausa'];
+// Estados del proyecto contable que sacan a la obra del listado: sólo se
+// trabaja en las activas. La obra sigue existiendo y su URL /obras/{id} sigue
+// funcionando; sólo deja de estorbar en el día a día. Se administra desde la
+// consola de la suite (no desde aquí).
+const ESTADOS_OCULTOS = ['pausa', 'terminado'];
+const ETIQUETA_ESTADO = { pausa: '⏸ En pausa', terminado: '✓ Terminada' };
 
 // Mostrar también las ocultas (lo prende el usuario con "Ver todas"). Vive
 // fuera de la función para sobrevivir al re-render.
@@ -55,22 +57,22 @@ export async function renderObrasList() {
     ? h('div', { class: 'empty' }, [
       h('div', { class: 'ico' }, '🏗'),
       ocultas.length > 0
-        ? h('div', {}, `Todas tus obras están en pausa (${ocultas.length}).`)
+        ? h('div', {}, `No tienes obras activas (${ocultas.length} en pausa o terminada${ocultas.length === 1 ? '' : 's'}).`)
         : h('div', {}, isAdmin ? 'Aún no hay obras. Crea la primera.' : 'No tienes obras asignadas. Pídele al admin que te asigne.')
     ])
     : h('div', { class: 'obras-grid' }, visibles.map(id => obraCard(id, obras[id], estados[id])));
 
-  // Pie discreto: deja ver las pausadas sin que estorben. Sin esto, una obra
-  // en pausa quedaría inalcanzable desde la interfaz.
+  // Pie discreto: deja ver las no activas sin que estorben. Sin esto, una obra
+  // en pausa o terminada quedaría inalcanzable desde la interfaz.
   const pie = ocultas.length === 0 ? null : h('div', {
     class: 'muted',
     style: { marginTop: '18px', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '8px' }
   }, [
-    h('span', {}, `${ocultas.length} obra${ocultas.length === 1 ? '' : 's'} en pausa`),
+    h('span', {}, `${ocultas.length} obra${ocultas.length === 1 ? '' : 's'} en pausa o terminada${ocultas.length === 1 ? '' : 's'}`),
     h('button', {
       class: 'btn ghost sm',
       onClick: () => { _verOcultas = !_verOcultas; renderObrasList(); }
-    }, _verOcultas ? 'Ocultar las pausadas' : 'Ver todas')
+    }, _verOcultas ? 'Ver sólo activas' : 'Ver todas')
   ]);
 
   renderShell([{ label: 'Obras' }], h('div', {}, [head, grid, pie]));
@@ -90,7 +92,10 @@ function obraCard(id, obra, estado) {
     h('h3', {}, [
       m.nombre || 'Sin nombre',
       ESTADOS_OCULTOS.includes(estado)
-        ? h('span', { class: 'tag warn', style: { marginLeft: '8px', fontSize: '11px' } }, '⏸ En pausa')
+        ? h('span', {
+            class: estado === 'terminado' ? 'tag' : 'tag warn',
+            style: { marginLeft: '8px', fontSize: '11px' }
+          }, ETIQUETA_ESTADO[estado] || estado)
         : null
     ]),
     h('div', { class: 'meta' }, [
