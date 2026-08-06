@@ -1,6 +1,6 @@
 import { h, modal, toast } from '../util/dom.js';
 import { renderShell } from './shell.js';
-import { loadObra, getConceptoById, resolveConceptoKeyLocal, createGenerador, setAvance, deleteGenerador } from '../services/db.js';
+import { loadObra, getConceptoById, resolveConceptoKeyLocal, createGenerador, setAvance, deleteGenerador, moveGenerador } from '../services/db.js';
 import { state } from '../state/store.js';
 import { navigate } from '../state/router.js';
 import { money, dateMx, num, num0, pct } from '../util/format.js';
@@ -44,9 +44,17 @@ export async function renderEstimacion({ params }) {
     } catch (err) { toast('Error: ' + err.message, 'danger'); }
   }
 
+  // Reordena un generador (dir=-1 sube, +1 baja) y renumera 1..N.
+  async function moverGeneradorFlow(gid, dir) {
+    try {
+      await moveGenerador(obraId, gid, dir);
+      renderEstimacion({ params: { id: obraId, estid: estId } });
+    } catch (err) { toast('Error: ' + err.message, 'danger'); }
+  }
+
   // Subtotal calculado
   let subtotal = 0;
-  const generadoresRows = gensInEstim.map(([gid, g]) => {
+  const generadoresRows = gensInEstim.map(([gid, g], idx) => {
     const c = getConceptoById(obra, g.conceptoId);
     const cant = c ? calcGeneradorTotal(c, g) : 0;
     const importe = cant * (c?.precio_unitario || 0);
@@ -66,6 +74,16 @@ export async function renderEstimacion({ params }) {
       h('td', { class: 'num' }, h('b', {}, money(importe))),
       h('td', { style: { whiteSpace: 'nowrap' } }, [
         overrun ? h('span', { class: 'tag warn' }, '⚠ sobreejec.') : h('span', { class: 'tag muted' }, PLANTILLAS[g.plantillaTipo]?.label || '—'),
+        editable && h('button', {
+          class: 'btn sm ghost', style: { marginLeft: '6px' }, disabled: idx === 0,
+          title: 'Subir (intercambia con el anterior)',
+          onClick: (e) => { e.stopPropagation(); if (idx > 0) moverGeneradorFlow(gid, -1); }
+        }, '↑'),
+        editable && h('button', {
+          class: 'btn sm ghost', disabled: idx === gensInEstim.length - 1,
+          title: 'Bajar (intercambia con el siguiente)',
+          onClick: (e) => { e.stopPropagation(); if (idx < gensInEstim.length - 1) moverGeneradorFlow(gid, 1); }
+        }, '↓'),
         editable && h('button', {
           class: 'btn sm danger ghost',
           style: { marginLeft: '6px' },

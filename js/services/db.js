@@ -495,6 +495,27 @@ export async function setAvance(obraId, conceptoId, estimacionId, cantidad) {
   await set(_ref(`obras/${obraId}/avances/${conceptoId}/${estimacionId}`), Number(cantidad) || 0);
 }
 
+// Mueve un generador una posición arriba (dir=-1) o abajo (dir=+1) dentro de su
+// estimación, intercambiándolo con el vecino y renumerando 1..N sin huecos.
+export async function moveGenerador(obraId, gid, dir) {
+  const all = await rread(`obras/${obraId}/generadores`) || {};
+  const target = all[gid];
+  if (!target) return false;
+  const estimacionId = target.estimacionId;
+  const ids = Object.entries(all)
+    .filter(([, g]) => g.estimacionId === estimacionId)
+    .sort((a, b) => (a[1].numero || 0) - (b[1].numero || 0) || (a[1].createdAt || 0) - (b[1].createdAt || 0))
+    .map(([id]) => id);
+  const idx = ids.indexOf(gid);
+  const swapIdx = idx + dir;
+  if (idx < 0 || swapIdx < 0 || swapIdx >= ids.length) return false;
+  [ids[idx], ids[swapIdx]] = [ids[swapIdx], ids[idx]];
+  const updates = {};
+  ids.forEach((id, i) => { if ((all[id].numero || 0) !== i + 1) updates[`${id}/numero`] = i + 1; });
+  if (Object.keys(updates).length) await update(_ref(`obras/${obraId}/generadores`), updates);
+  return true;
+}
+
 // === Cross-app: vínculos obra ↔ proyecto y lectura de bitácora ===
 // Estos paths viven en /shared/* o /legacy/bitacora/* — no bajo APP_BASE_PATH.
 // Por eso usamos paths absolutos (con "/" inicial) que el _resolve respeta.
