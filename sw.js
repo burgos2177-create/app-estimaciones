@@ -2,7 +2,7 @@
 // Intenta traer código fresco de la red; si la red falla (típico en obra),
 // cae al caché; si es una navegación sin caché, sirve el shell para que la app
 // igual arranque. NUNCA devuelve vacío → nunca el error "Load failed" en blanco.
-const CACHE = 'estim-cache-v2';
+const CACHE = 'estim-cache-v3';
 
 self.addEventListener('install', () => self.skipWaiting());
 self.addEventListener('activate', (e) => e.waitUntil((async () => {
@@ -17,7 +17,14 @@ self.addEventListener('fetch', (event) => {
   const sameOrigin = req.url.startsWith(self.location.origin);
   event.respondWith((async () => {
     try {
-      const res = await fetch(req);            // network-first (con caché HTTP como respaldo natural)
+      // Para archivos PROPIOS (no navegación, no CDN) revalidamos contra el
+      // servidor con 'no-cache': evita que el navegador sirva JS/CSS viejo del
+      // caché HTTP (hasta ~10 min en GitHub Pages) y ya no haga falta forzar refresh.
+      let fetchReq = req;
+      if (sameOrigin && req.mode !== 'navigate') {
+        try { fetchReq = new Request(req, { cache: 'no-cache' }); } catch { fetchReq = req; }
+      }
+      const res = await fetch(fetchReq);       // network-first (con caché como respaldo)
       if (res && res.ok && sameOrigin) {
         const copy = res.clone();
         caches.open(CACHE).then((c) => c.put(req, copy)).catch(() => {});
