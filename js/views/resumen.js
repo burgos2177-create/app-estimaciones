@@ -53,7 +53,7 @@ async function draw(obraId, obra, estId) {
   const ests = obra.estimaciones || {};
   const estsArr = Object.entries(ests).map(([id, e]) => ({ id, ...e })).sort((a, b) => (a.numero || 0) - (b.numero || 0));
   const data = buildResumenData(obra, estId);
-  const { est, ivaPct, anticipoPct, rows, subtotalEsta, ivaEsta, ivaAcum, ivaManual, importeEsta, avPond, importeAcumEjec, importeAcumEjecCIVA, subtotalPagado, ivaPagado, importePagado, diferencia, diferenciaPct, anticipoMontoBase, amortizacionEsta, amortizacionAcum, saldoAnticipoPorAmortizar, netoEsta, netoAcum, anticipoRecibido, totalRecibidoCliente, saldoCaja, excesoAnticipo, abonosCliente, subtotalAbono, sugeridoPagoJusto, amortizacionAcumHasta, netoAcumHasta, pagosPrevios } = data;
+  const { est, ivaPct, anticipoPct, rows, subtotalEsta, ivaEsta, ivaAcum, ivaManual, importeEsta, avPond, importeAcumEjec, importeAcumEjecCIVA, subtotalPagado, ivaPagado, importePagado, diferencia, diferenciaPct, anticipoMontoBase, amortizacionEsta, amortizacionAcum, saldoAnticipoPorAmortizar, netoEsta, netoAcum, anticipoRecibido, totalRecibidoCliente, saldoCaja, excesoAnticipo, abonosCliente, subtotalAbono, sugeridoPagoJusto, amortizacionAcumHasta, netoAcumHasta, pagosPrevios, subtotalRecibidoCaja, ivaRecibidoCaja, saldoSubtotalCaja, ivaEjecCaja, saldoIvaCaja } = data;
 
   const estSel = h('select', { onchange: e => { draw(obraId, obra, e.target.value); } },
     estsArr.map(es => h('option', { value: es.id, selected: es.id === estId }, `Estimación #${es.numero}`)));
@@ -220,10 +220,45 @@ async function draw(obraId, obra, estId) {
       kvBig('Total recibido', money(totalRecibidoCliente), ''),
       kvBig('Ejecutado (c/IVA)', money(importeAcumEjecCIVA), '')
     ]),
+    // Peras con peras: subtotal e IVA separados. El anticipo cuenta como subtotal;
+    // cada pago aporta su subtotal y su IVA. Así el ajuste de IVA manual no
+    // distorsiona el saldo de subtotal (el anticipo por consumir).
+    h('table', { class: 'tbl', style: { marginTop: '16px' } }, [
+      h('thead', {}, [h('tr', {}, [
+        h('th', {}, ''), h('th', { class: 'num' }, 'Recibido'),
+        h('th', { class: 'num' }, 'Ejecutado a la fecha'), h('th', { class: 'num' }, 'Saldo a favor')
+      ])]),
+      h('tbody', {}, [
+        h('tr', {}, [
+          h('td', {}, 'Subtotal (obra)'),
+          h('td', { class: 'num' }, money(subtotalRecibidoCaja)),
+          h('td', { class: 'num muted' }, money(importeAcumEjec)),
+          h('td', { class: 'num' + (saldoSubtotalCaja >= 0 ? ' ok' : ' warn') }, money(saldoSubtotalCaja))
+        ]),
+        h('tr', {}, [
+          h('td', {}, 'IVA'),
+          h('td', { class: 'num' }, money(ivaRecibidoCaja)),
+          h('td', { class: 'num muted' }, money(ivaEjecCaja)),
+          h('td', { class: 'num' + (saldoIvaCaja >= 0 ? ' ok' : ' warn') }, money(saldoIvaCaja))
+        ]),
+        h('tr', { style: { fontWeight: 700, borderTop: '2px solid var(--border)' } }, [
+          h('td', {}, 'Total'),
+          h('td', { class: 'num' }, money(totalRecibidoCliente)),
+          h('td', { class: 'num' }, money(importeAcumEjecCIVA)),
+          h('td', { class: 'num' + (saldoCaja >= 0 ? ' ok' : ' warn') }, money(saldoCaja))
+        ])
+      ])
+    ]),
     h('div', { style: { marginTop: '14px', paddingTop: '12px', borderTop: '1px solid var(--border)' } }, [
       kvBig(saldoCaja >= 0 ? 'Saldo a favor del cliente' : 'Saldo por cobrar al cliente', money(Math.abs(saldoCaja)), saldoCaja >= 0 ? 'ok' : 'warn')
     ]),
-    h('p', { class: 'muted', style: { fontSize: '11px', marginTop: '8px' } }, 'Total recibido − ejecutado a la fecha. Positivo = el cliente ha entregado de más (p.ej. anticipo por encima del contractual); negativo = falta cobrarle.')
+    h('p', { class: 'muted', style: { fontSize: '11px', marginTop: '8px' } }, [
+      'Total recibido − ejecutado a la fecha, separado peras con peras. El ',
+      h('b', {}, 'anticipo se cuenta como subtotal'),
+      ' (sin IVA): por eso el saldo a favor vive en la línea de ', h('b', {}, 'Subtotal'),
+      ' (es el anticipo por consumir). La línea de ', h('b', {}, 'IVA'),
+      ' compara el IVA que el cliente ya pagó contra el IVA de lo ejecutado; al bajar el IVA manual se mueven ambos lados juntos, así que ya NO infla el saldo de subtotal.'
+    ])
   ]);
 
   const blocks = [head, sub];

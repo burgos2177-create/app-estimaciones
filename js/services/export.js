@@ -448,6 +448,16 @@ export function buildResumenData(obra, estId) {
   const abonosCliente = importePagado + excesoAnticipo;   // pagos + excedente de anticipo
   const totalRecibidoCliente = anticipoRecibido + importePagado;
   const saldoCaja = totalRecibidoCliente - importeAcumEjecCIVA;
+  // Caja separada en SUBTOTAL e IVA (peras con peras): el anticipo se trata como
+  // subtotal (sin IVA), y cada pago aporta su subtotal y su IVA. Así, al ajustar
+  // el IVA manual, el saldo de subtotal (el anticipo por consumir) NO se distorsiona
+  // — solo se mueve la línea de IVA, que está balanceada porque el mismo IVA
+  // reducido entró en los pagos. saldoSubtotalCaja + saldoIvaCaja === saldoCaja.
+  const subtotalRecibidoCaja = anticipoRecibido + subtotalPagado;   // anticipo = subtotal
+  const ivaRecibidoCaja = ivaPagado;                                // anticipo sin IVA
+  const saldoSubtotalCaja = subtotalRecibidoCaja - importeAcumEjec;
+  const ivaEjecCaja = ivaAcum;
+  const saldoIvaCaja = ivaRecibidoCaja - ivaEjecCaja;
   // Abono NETO: el pago del cliente se contabiliza como neto cobrado, de modo que
   // subtotal + IVA = importe (la amortización vive en el bloque de Anticipo, no
   // aquí). subtotalAbono es el subtotal que cuadra con abonosCliente.
@@ -485,6 +495,7 @@ export function buildResumenData(obra, estId) {
     subtotalPagado, ivaPagado, importePagado, subtotalAbono,
     excesoAnticipo, abonosCliente,
     anticipoRecibido, totalRecibidoCliente, saldoCaja,
+    subtotalRecibidoCaja, ivaRecibidoCaja, saldoSubtotalCaja, ivaEjecCaja, saldoIvaCaja,
     netoAcumHasta, amortizacionAcumHasta, pagosPrevios, sugeridoPagoJusto
   };
 }
