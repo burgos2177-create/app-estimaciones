@@ -453,8 +453,12 @@ export function buildResumenData(obra, estId) {
   // el IVA manual, el saldo de subtotal (el anticipo por consumir) NO se distorsiona
   // — solo se mueve la línea de IVA, que está balanceada porque el mismo IVA
   // reducido entró en los pagos. saldoSubtotalCaja + saldoIvaCaja === saldoCaja.
-  const subtotalRecibidoCaja = anticipoRecibido + subtotalPagado;   // anticipo = subtotal
-  const ivaRecibidoCaja = ivaPagado;                                // anticipo sin IVA
+  // IVA recibido = el IVA que el cliente pagó en sus abonos (el anticipo no lleva
+  // IVA). El subtotal recibido es TODO lo demás (total − IVA), así SIEMPRE cuadra
+  // con el total recibido — sin depender del subtotal guardado en cada pago (los
+  // pagos viejos lo guardaban en bruto y descuadraban la suma).
+  const ivaRecibidoCaja = ivaPagado;
+  const subtotalRecibidoCaja = totalRecibidoCliente - ivaRecibidoCaja;
   const saldoSubtotalCaja = subtotalRecibidoCaja - importeAcumEjec;
   const ivaEjecCaja = ivaAcum;
   const saldoIvaCaja = ivaRecibidoCaja - ivaEjecCaja;
