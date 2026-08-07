@@ -615,7 +615,7 @@ function applyPrintFilter(rows, cfg) {
 export function exportResumenXlsx(obra, estId, cfg = {}) {
   cfg = { ...DEFAULT_PRINT_CFG, ...cfg };
   const data = buildResumenData(obra, estId);
-  const { m, est, ivaPct, anticipoPct, subtotalEsta, ivaEsta, importeEsta, avPond, diferencia, diferenciaPct, importeAcumEjec, importeAcumEjecCIVA, subtotalPagado, ivaPagado, importePagado, subtotalAbono, abonosCliente, ivaAcum, anticipoMontoBase, anticipoTotal, amortizacionEsta, amortizacionAcum, saldoAnticipoPorAmortizar, netoEsta, netoAcum, anticipoRecibido, totalRecibidoCliente, saldoCaja } = data;
+  const { m, est, ivaPct, anticipoPct, subtotalEsta, ivaEsta, importeEsta, avPond, diferencia, diferenciaPct, importeAcumEjec, importeAcumEjecCIVA, subtotalPagado, ivaPagado, importePagado, subtotalAbono, abonosCliente, ivaAcum, anticipoMontoBase, anticipoTotal, amortizacionEsta, amortizacionAcum, saldoAnticipoPorAmortizar, netoEsta, netoAcum, anticipoRecibido, totalRecibidoCliente, saldoCaja, subtotalRecibidoCaja, ivaRecibidoCaja, saldoSubtotalCaja, ivaEjecCaja, saldoIvaCaja } = data;
   const rows = applyPrintFilter(data.rows, cfg);
   const titulo = cfg.modo === 'estadoCuenta' ? 'ESTADO DE CUENTA' : 'RESUMEN DE ESTIMACIÓN';
 
@@ -687,8 +687,11 @@ export function exportResumenXlsx(obra, estId, cfg = {}) {
     aoa.push(['CAJA DEL CLIENTE']);
     aoa.push(['Anticipo recibido (real)', '', '', anticipoRecibido]);
     aoa.push(['Pagos de estimaciones recibidos', '', '', importePagado]);
-    aoa.push(['Total recibido del cliente', '', '', totalRecibidoCliente]);
-    aoa.push(['Ejecutado a la fecha (c/IVA)', '', '', importeAcumEjecCIVA]);
+    // Desglose peras con peras: subtotal e IVA por separado (anticipo = subtotal).
+    aoa.push(['Concepto', 'Recibido', 'Ejecutado a la fecha', 'Saldo a favor']);
+    aoa.push(['Subtotal (obra)', subtotalRecibidoCaja, importeAcumEjec, saldoSubtotalCaja]);
+    aoa.push(['IVA', ivaRecibidoCaja, ivaEjecCaja, saldoIvaCaja]);
+    aoa.push(['Total', totalRecibidoCliente, importeAcumEjecCIVA, saldoCaja]);
     aoa.push([saldoCaja >= 0 ? 'Saldo a favor del cliente' : 'Saldo por cobrar al cliente', '', '', saldoCaja]);
   }
 
@@ -731,7 +734,7 @@ export function exportResumenXlsx(obra, estId, cfg = {}) {
 export async function exportResumenPdf(obra, estId, cfg = {}) {
   cfg = { ...DEFAULT_PRINT_CFG, ...cfg };
   const data = buildResumenData(obra, estId);
-  const { m, est, ivaPct, anticipoPct, subtotalEsta, ivaEsta, importeEsta, avPond, diferencia, diferenciaPct, importeAcumEjec, importeAcumEjecCIVA, subtotalPagado, ivaPagado, importePagado, subtotalAbono, abonosCliente, ivaAcum, anticipoMontoBase, anticipoTotal, amortizacionEsta, amortizacionAcum, saldoAnticipoPorAmortizar, netoEsta, netoAcum, anticipoRecibido, totalRecibidoCliente, saldoCaja } = data;
+  const { m, est, ivaPct, anticipoPct, subtotalEsta, ivaEsta, importeEsta, avPond, diferencia, diferenciaPct, importeAcumEjec, importeAcumEjecCIVA, subtotalPagado, ivaPagado, importePagado, subtotalAbono, abonosCliente, ivaAcum, anticipoMontoBase, anticipoTotal, amortizacionEsta, amortizacionAcum, saldoAnticipoPorAmortizar, netoEsta, netoAcum, anticipoRecibido, totalRecibidoCliente, saldoCaja, subtotalRecibidoCaja, ivaRecibidoCaja, saldoSubtotalCaja, ivaEjecCaja, saldoIvaCaja } = data;
   const rows = applyPrintFilter(data.rows, cfg);
   const isEstadoCuenta = cfg.modo === 'estadoCuenta';
 
@@ -855,25 +858,36 @@ export async function exportResumenPdf(obra, estId, cfg = {}) {
     doc.setFillColor(247, 249, 252); doc.rect(30, cy, wpg - 60, 18, 'F');
     doc.setFont('helvetica', 'bold'); doc.setFontSize(10); doc.setTextColor(30);
     doc.text('CAJA DEL CLIENTE', 38, cy + 13);
-    const cajaBody = [
-      ['Anticipo recibido (real)', money(anticipoRecibido)],
-      ['Pagos de estimaciones recibidos', money(importePagado)],
-      [{ content: 'Total recibido del cliente', styles: { fontStyle: 'bold' } }, { content: money(totalRecibidoCliente), styles: { fontStyle: 'bold' } }],
-      ['Ejecutado a la fecha (c/IVA)', money(importeAcumEjecCIVA)],
-      [{ content: saldoCaja >= 0 ? 'Saldo a favor del cliente' : 'Saldo por cobrar al cliente', styles: { fontStyle: 'bold' } },
-       { content: money(Math.abs(saldoCaja)), styles: { fontStyle: 'bold', textColor: saldoCaja >= 0 ? [30, 140, 90] : [180, 70, 60] } }]
-    ];
+    // Línea de origen del efectivo recibido
+    doc.setFont('helvetica', 'normal'); doc.setFontSize(8); doc.setTextColor(90);
+    doc.text(`Anticipo recibido (real): ${money(anticipoRecibido)}   ·   Pagos de estimaciones: ${money(importePagado)}`, 38, cy + 30);
+    // Desglose peras con peras: subtotal e IVA por separado (el anticipo cuenta
+    // como subtotal, sin IVA), así ajustar el IVA manual no distorsiona el saldo.
+    const saldoColor = v => v >= 0 ? [30, 140, 90] : [180, 70, 60];
     doc.autoTable({
-      startY: cy + 22,
-      body: cajaBody,
-      theme: 'plain',
+      startY: cy + 38,
+      head: [['', 'Recibido', 'Ejecutado a la fecha', 'Saldo a favor']],
+      body: [
+        ['Subtotal (obra)', money(subtotalRecibidoCaja), money(importeAcumEjec),
+          { content: money(saldoSubtotalCaja), styles: { textColor: saldoColor(saldoSubtotalCaja) } }],
+        ['IVA', money(ivaRecibidoCaja), money(ivaEjecCaja),
+          { content: money(saldoIvaCaja), styles: { textColor: saldoColor(saldoIvaCaja) } }]
+      ],
+      foot: [[
+        { content: 'Total', styles: { fontStyle: 'bold' } },
+        { content: money(totalRecibidoCliente), styles: { fontStyle: 'bold' } },
+        { content: money(importeAcumEjecCIVA), styles: { fontStyle: 'bold' } },
+        { content: money(saldoCaja), styles: { fontStyle: 'bold', textColor: saldoColor(saldoCaja) } }
+      ]],
       styles: { font: 'helvetica', fontSize: 9, cellPadding: 4 },
-      columnStyles: { 0: { textColor: 60 }, 1: { halign: 'right' } },
+      headStyles: { fillColor: [60, 72, 90], textColor: 230, fontStyle: 'bold', halign: 'right' },
+      footStyles: { fillColor: [244, 247, 250], textColor: 30 },
+      columnStyles: { 0: { textColor: 60, halign: 'left' }, 1: { halign: 'right' }, 2: { halign: 'right', textColor: 110 }, 3: { halign: 'right' } },
       margin: { left: 30, right: 30 }
     });
     doc.setFontSize(7.5); doc.setTextColor(130);
-    doc.text('Total recibido − ejecutado a la fecha. Positivo = el cliente ha entregado de más (p.ej. anticipo por encima del contractual).',
-      30, doc.lastAutoTable.finalY + 10);
+    const cajaNota = doc.splitTextToSize('Separado peras con peras: el anticipo se cuenta como subtotal (sin IVA), por eso el saldo a favor vive en la línea de Subtotal (el anticipo por consumir). Al ajustar el IVA manual se mueven ambos lados de la línea de IVA, sin distorsionar el subtotal.', wpg - 60);
+    doc.text(cajaNota, 30, doc.lastAutoTable.finalY + 10);
   }
 
   let tailY = doc.lastAutoTable ? doc.lastAutoTable.finalY : 250;   // fin del contenido financiero
