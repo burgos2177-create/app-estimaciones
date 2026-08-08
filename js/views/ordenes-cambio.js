@@ -32,8 +32,9 @@ function itemImpacto(item, conceptosMap) {
   const c = conceptosMap[item.conceptoId];
   const pu = c ? (Number(c.precio_unitario) || 0) : 0;
   if (item.accion === 'quitar') {
-    const v = c ? (Number(c.total) || (Number(c.cantidad) || 0) * pu) : 0;
-    return { aditivo: 0, deductivo: v };
+    // 'cantidad' = cuánto se quita (parcial o total). Sin dato = concepto completo.
+    const cant = (item.cantidad != null && item.cantidad !== '') ? Number(item.cantidad) : (c ? Number(c.cantidad) || 0 : 0);
+    return { aditivo: 0, deductivo: cant * pu };
   }
   if (item.accion === 'modificar') {
     const antes = c ? (Number(c.cantidad) || 0) : 0;
@@ -208,7 +209,7 @@ export async function renderOrdenesCambio({ params }) {
           h('div', { style: { fontSize: '13px' } }, c?.descripcion || '—'),
           it.accion === 'modificar'
             ? h('div', { class: 'muted', style: { fontSize: '11px' } }, `cant. ${num(c?.cantidad, 2)} → ${num(it.despues, 2)} ${c?.unidad || ''}`)
-            : h('div', { class: 'muted', style: { fontSize: '11px' } }, `quitar ${num(c?.cantidad, 2)} ${c?.unidad || ''} × ${money(c?.precio_unitario)}`)
+            : h('div', { class: 'muted', style: { fontSize: '11px' } }, `quitar ${num(it.cantidad != null ? it.cantidad : c?.cantidad, 2)} de ${num(c?.cantidad, 2)} ${c?.unidad || ''} × ${money(c?.precio_unitario)}`)
         ]);
       }
       const accionTag = { agregar: ['ok', '＋ Agregar'], modificar: ['muted', '✎ Modificar'], quitar: ['warn', '－ Quitar'] }[it.accion] || ['muted', it.accion];
@@ -254,31 +255,57 @@ export async function renderOrdenesCambio({ params }) {
     async function addSobreConcepto(accion) {
       if (!puConceptos.length) { toast('No hay conceptos en el catálogo', 'warn'); return; }
       const sel = h('select', { style: { width: '100%' } }, puConceptos.map(c => h('option', { value: c.id }, `${c.clave || ''} — ${(c.descripcion || '').slice(0, 70)}`)));
-      const nuevaCant = accion === 'modificar' ? h('input', { type: 'number', step: 'any', placeholder: 'Nueva cantidad' }) : null;
+      // modificar → nueva cantidad absoluta; quitar → cantidad A QUITAR (default: la completa)
+      const cantIn = h('input', { type: 'number', step: 'any', placeholder: accion === 'modificar' ? 'Nueva cantidad' : 'Cantidad a quitar' });
       const info = h('div', { class: 'muted', style: { fontSize: '12px', marginTop: '8px' } });
-      function refreshInfo() {
+      const impacto = h('div', { style: { fontSize: '12px', marginTop: '6px' } });
+      function refreshInfo(resetCant) {
         const c = conceptosMap[sel.value];
-        if (!c) { info.textContent = ''; return; }
+        if (!c) { info.textContent = ''; impacto.textContent = ''; return; }
         info.textContent = `Actual: ${num(c.cantidad, 2)} ${c.unidad || ''} × ${money(c.precio_unitario)} = ${money(c.total)}`;
+        if (accion === 'quitar' && resetCant) cantIn.value = Number(c.cantidad) || 0;   // default: quitar todo
+        refreshImpacto();
       }
-      sel.addEventListener('change', refreshInfo); refreshInfo();
+      function refreshImpacto() {
+        const c = conceptosMap[sel.value]; if (!c) { impacto.textContent = ''; return; }
+        const pu = Number(c.precio_unitario) || 0, actual = Number(c.cantidad) || 0, v = Number(cantIn.value);
+        if (isNaN(v)) { impacto.textContent = ''; return; }
+        if (accion === 'quitar') {
+          impacto.innerHTML = '';
+          impacto.appendChild(h('span', { class: 'warn' }, `Deductivo: −${money(v * pu)}`));
+          if (v > actual) impacto.appendChild(h('span', { class: 'warn', style: { marginLeft: '8px' } }, `⚠ no puedes quitar más de ${num(actual, 2)}`));
+          else impacto.appendChild(h('span', { class: 'muted', style: { marginLeft: '8px' } }, `queda ${num(actual - v, 2)} ${c.unidad || ''}`));
+        } else {
+          const delta = (v - actual) * pu;
+          impacto.innerHTML = '';
+          impacto.appendChild(delta >= 0
+            ? h('span', { class: 'ok' }, `Aditivo: +${money(delta)}`)
+            : h('span', { class: 'warn' }, `Deductivo: −${money(-delta)}`));
+        }
+      }
+      sel.addEventListener('change', () => refreshInfo(true));
+      cantIn.addEventListener('input', refreshImpacto);
+      refreshInfo(true);
       const ok = await modal({
-        title: accion === 'modificar' ? 'Modificar cantidad (aditiva/deductiva)' : 'Quitar concepto (deductiva)',
+        title: accion === 'modificar' ? 'Modificar cantidad (aditiva/deductiva)' : 'Quitar cantidad (deductiva)',
         body: h('div', {}, [
           h('div', { class: 'field' }, [h('label', {}, 'Concepto del catálogo'), sel]),
           info,
-          accion === 'modificar' && h('div', { class: 'field', style: { marginTop: '10px' } }, [h('label', {}, 'Nueva cantidad'), nuevaCant]),
-          accion === 'quitar' && h('p', { class: 'muted', style: { fontSize: '11px', marginTop: '8px' } }, 'Al aplicar la OC no se podrá quitar por debajo de lo ya ejecutado (esa validación corre en la fase de aplicación).')
+          h('div', { class: 'field', style: { marginTop: '10px' } }, [h('label', {}, accion === 'modificar' ? 'Nueva cantidad (total)' : 'Cantidad a quitar'), cantIn]),
+          impacto,
+          accion === 'quitar' && h('p', { class: 'muted', style: { fontSize: '11px', marginTop: '8px' } }, 'Deja la cantidad completa para quitar el concepto entero, o pon menos para quitar solo una parte. Al aplicar la OC no se podrá quitar por debajo de lo ya ejecutado (validación en la fase de aplicación).')
         ]),
-        confirmLabel: accion === 'modificar' ? 'Agregar cambio' : 'Agregar quitar',
+        confirmLabel: 'Agregar cambio',
         onConfirm: () => {
-          if (accion === 'modificar' && (nuevaCant.value === '' || isNaN(Number(nuevaCant.value)))) { toast('Captura la nueva cantidad', 'warn'); return false; }
+          if (cantIn.value === '' || isNaN(Number(cantIn.value))) { toast('Captura la cantidad', 'warn'); return false; }
+          const c = conceptosMap[sel.value];
+          if (accion === 'quitar' && Number(cantIn.value) > (Number(c?.cantidad) || 0)) { toast('No puedes quitar más de la cantidad contratada', 'warn'); return false; }
           return true;
         }
       });
       if (!ok) return;
-      if (accion === 'modificar') work.items.push({ accion, conceptoId: sel.value, despues: Number(nuevaCant.value) || 0 });
-      else work.items.push({ accion, conceptoId: sel.value });
+      if (accion === 'modificar') work.items.push({ accion, conceptoId: sel.value, despues: Number(cantIn.value) || 0 });
+      else work.items.push({ accion, conceptoId: sel.value, cantidad: Number(cantIn.value) || 0 });
       renderItems();
     }
 
@@ -301,7 +328,7 @@ export async function renderOrdenesCambio({ params }) {
           h('div', { style: { flex: 1 } }),
           !readonly && h('button', { class: 'btn sm ok', onClick: addAgregar }, '＋ Agregar concepto'),
           !readonly && h('button', { class: 'btn sm', onClick: () => addSobreConcepto('modificar') }, '✎ Modificar cantidad'),
-          !readonly && h('button', { class: 'btn sm warn', onClick: () => addSobreConcepto('quitar') }, '－ Quitar concepto')
+          !readonly && h('button', { class: 'btn sm warn', onClick: () => addSobreConcepto('quitar') }, '－ Quitar cantidad')
         ]),
         h('table', { class: 'tbl' }, [
           h('thead', {}, [h('tr', {}, [h('th', {}, 'Acción'), h('th', {}, 'Concepto'), h('th', { class: 'num' }, 'Aditivo'), h('th', { class: 'num' }, 'Deductivo'), h('th', {}, '')])]),
