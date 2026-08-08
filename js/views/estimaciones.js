@@ -1,10 +1,16 @@
 import { h, modal, toast } from '../util/dom.js';
 import { renderShell } from './shell.js';
-import { loadObra, resolveConceptoKeyLocal, createEstimacion, cerrarEstimacion, reabrirEstimacion } from '../services/db.js';
+import { loadObra, resolveConceptoKeyLocal, createEstimacion, cerrarEstimacion, reabrirEstimacion, setAvanceObra } from '../services/db.js';
 import { state } from '../state/store.js';
 import { navigate } from '../state/router.js';
 import { money, dateMx, num0, pct } from '../util/format.js';
 import { calcGeneradorTotal } from '../services/plantillas.js';
+import { computeAvanceObra } from '../services/export.js';
+
+// Republica el avance + historial a /shared para bitácora tras cerrar/reabrir.
+async function publicarAvance(obraId) {
+  try { const obra = await loadObra(obraId); const s = computeAvanceObra(obra); if (s) setAvanceObra(obraId, s); } catch {}
+}
 
 export async function renderEstimaciones({ params }) {
   const obraId = params.id;
@@ -153,6 +159,7 @@ async function cerrarConfirm(obraId, estId, numero) {
     confirmLabel: 'Cerrar estimación',
     onConfirm: async () => {
       await cerrarEstimacion(obraId, estId, state.user.uid);
+      await publicarAvance(obraId);
       toast('Estimación cerrada', 'ok');
       renderEstimaciones({ params: { id: obraId } });
       return true;
@@ -167,6 +174,7 @@ async function reabrirConfirm(obraId, estId, numero) {
     confirmLabel: 'Reabrir',
     onConfirm: async () => {
       await reabrirEstimacion(obraId, estId);
+      await publicarAvance(obraId);
       toast('Estimación reabierta', 'ok');
       renderEstimaciones({ params: { id: obraId } });
       return true;

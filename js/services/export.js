@@ -532,8 +532,59 @@ export function computeAvanceObra(obra) {
     netoACobrarAcum: d.netoAcum,
     cobradoEstimaciones: d.importePagado,
     anticipoRecibido: d.anticipoRecibido,
-    avancePct: subtotalContrato ? d.importeAcumEjec / subtotalContrato : 0
+    avancePct: subtotalContrato ? d.importeAcumEjec / subtotalContrato : 0,
+    // Serie histórica (un punto por estimación) para que bitácora dibuje la curva.
+    historial: computeAvanceHistorial(obra, subtotalContrato)
   };
+}
+
+function _ymd(v) {
+  if (v == null || v === '') return null;
+  if (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}/.test(v)) return v.slice(0, 10);
+  const d = new Date(v);
+  return isNaN(d) ? null : d.toISOString().slice(0, 10);
+}
+function _r2(x) { return Math.round((Number(x) || 0) * 100) / 100; }
+
+// Serie acumulada de ejecutado a precio de catálogo (sin IVA), un punto por
+// estimación (llave = id de estimación → idempotente). EXCLUYE proyección; marca
+// estado 'cerrada'/'abierta'. El acumulado usa la misma definición que el campo
+// raíz ejecutadoCatalogoSubtotal, así el último punto (no proyección) coincide.
+export function computeAvanceHistorial(obra, subtotalContrato) {
+  const conceptosAll = obra.catalogo?.conceptos || {};
+  const conceptos = filterCatalogo(conceptosAll);
+  const ejecMap = buildExecMap(conceptosAll, obra.generadores || {}, obra.avances || {}, obra.catalogo?.migrationKeyMap, obra.estimaciones || {});
+  const subtotalPorEstim = {};
+  for (const c of conceptos) {
+    const ejec = ejecMap[c.id] || {};
+    const pu = c.precio_unitario || 0;
+    for (const eid in ejec) subtotalPorEstim[eid] = (subtotalPorEstim[eid] || 0) + ejec[eid] * pu;
+  }
+  const m = obra.meta || {};
+  const contrato = Number(subtotalContrato) || (Number(obra.integracion?.subtotal_venta) || ((Number(m.montoContratoCIVA) || 0) / (1 + Number(m.ivaPct ?? 0.16))));
+  const ests = Object.entries(obra.estimaciones || {})
+    .map(([id, e]) => ({ id, ...e }))
+    .sort((a, b) => (a.numero || 0) - (b.numero || 0));
+  const now = Date.now();
+  const historial = {};
+  let acum = 0;
+  for (const e of ests) {
+    if (e.esProyeccion) continue;                 // proyección no va a la curva real
+    const periodo = subtotalPorEstim[e.id] || 0;
+    acum += periodo;
+    historial[e.id] = {
+      numero: e.numero || 0,
+      estado: e.estado === 'cerrada' ? 'cerrada' : 'abierta',
+      fechaCierre: _ymd(e.fechaCorte),
+      periodoDesde: _ymd(e.periodoIni),
+      periodoHasta: _ymd(e.periodoFin),
+      ejecutadoCatalogoSubtotal: _r2(acum),        // ACUMULADO hasta esta estimación
+      ejecutadoPeriodoSubtotal: _r2(periodo),      // solo lo del periodo
+      avancePct: contrato ? acum / contrato : 0,
+      updatedAt: now
+    };
+  }
+  return historial;
 }
 
 const DEFAULT_PRINT_CFG = {
