@@ -5,10 +5,10 @@
 
 import { h } from '../util/dom.js';
 import { renderShell } from './shell.js';
-import { loadObra, getConceptoById, resolveConceptoKeyLocal } from '../services/db.js';
+import { loadObra, getConceptoById, resolveConceptoKeyLocal, setAvanceObra } from '../services/db.js';
 import { money, num, num0, pct } from '../util/format.js';
 import { calcGeneradorTotal } from '../services/plantillas.js';
-import { exportF1Pdf, exportF1Xlsx } from '../services/export.js';
+import { exportF1Pdf, exportF1Xlsx, computeAvanceObra } from '../services/export.js';
 
 export async function renderF1({ params }) {
   const obraId = params.id;
@@ -16,6 +16,9 @@ export async function renderF1({ params }) {
 
   const obra = await loadObra(obraId);
   if (!obra) { renderShell(crumbs(obraId), h('div', { class: 'empty' }, 'Obra no encontrada.')); return; }
+
+  // Republica el avance a /shared para bitácora (excluye proyección). Fire-and-forget.
+  try { const s = computeAvanceObra(obra); if (s) setAvanceObra(obraId, s); } catch {}
   const m = obra.meta || {};
   const conceptos = obra.catalogo?.conceptos || {};
   const estimaciones = obra.estimaciones || {};

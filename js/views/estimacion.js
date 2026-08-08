@@ -1,11 +1,11 @@
 import { h, modal, toast } from '../util/dom.js';
 import { renderShell } from './shell.js';
-import { loadObra, getConceptoById, resolveConceptoKeyLocal, createGenerador, setAvance, deleteGenerador, moveGenerador, setEstimacionProyeccion, setGeneradorProyeccion } from '../services/db.js';
+import { loadObra, getConceptoById, resolveConceptoKeyLocal, createGenerador, setAvance, deleteGenerador, moveGenerador, setEstimacionProyeccion, setGeneradorProyeccion, setAvanceObra } from '../services/db.js';
 import { state } from '../state/store.js';
 import { navigate } from '../state/router.js';
 import { money, dateMx, num, num0, pct } from '../util/format.js';
 import { calcGeneradorTotal, PLANTILLAS } from '../services/plantillas.js';
-import { exportEstimacionPdf } from '../services/export.js';
+import { exportEstimacionPdf, computeAvanceObra } from '../services/export.js';
 
 export async function renderEstimacion({ params }) {
   const obraId = params.id;
@@ -18,6 +18,10 @@ export async function renderEstimacion({ params }) {
   const m = obra.meta || {};
   const est = obra.estimaciones?.[estId];
   if (!est) { renderShell(crumbs(obraId, m.nombre, estId), h('div', { class: 'empty' }, 'Estimación no encontrada.')); return; }
+
+  // Republica el avance a /shared para bitácora (excluye proyección). Fire-and-forget.
+  // Cubre el caso de togglear proyección aquí sin abrir el RESUMEN.
+  try { const s = computeAvanceObra(obra); if (s) setAvanceObra(obraId, s); } catch {}
 
   const conceptos = obra.catalogo?.conceptos || {};
   const generadores = obra.generadores || {};

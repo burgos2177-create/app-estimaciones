@@ -509,6 +509,33 @@ export function buildResumenData(obra, estId) {
   };
 }
 
+// Resumen de avance de la obra para publicar a /shared/avanceObra (bitácora).
+// Los acumulados ya EXCLUYEN lo marcado como proyección (vía buildExecMap).
+// Devuelve null si la obra aún no tiene estimaciones.
+export function computeAvanceObra(obra) {
+  const ests = obra.estimaciones || {};
+  const ids = Object.keys(ests);
+  if (!ids.length) return null;
+  // Cualquier estimación sirve de contexto: los acumulados no dependen de cuál.
+  const ctxEst = ids.sort((a, b) => (ests[a].numero || 0) - (ests[b].numero || 0)).pop();
+  const d = buildResumenData(obra, ctxEst);
+  const m = obra.meta || {};
+  const ivaPct = Number(m.ivaPct ?? 0.16);
+  const subtotalContrato = Number(obra.integracion?.subtotal_venta) || ((Number(m.montoContratoCIVA) || 0) / (1 + ivaPct));
+  return {
+    obraNombre: m.nombre || '',
+    contratoCIVA: Number(m.montoContratoCIVA) || 0,
+    contratoSubtotal: subtotalContrato,
+    ejecutadoCatalogoSubtotal: d.importeAcumEjec,
+    ejecutadoCatalogoCIVA: d.importeAcumEjecCIVA,
+    ivaEjecutado: d.ivaAcum,
+    netoACobrarAcum: d.netoAcum,
+    cobradoEstimaciones: d.importePagado,
+    anticipoRecibido: d.anticipoRecibido,
+    avancePct: subtotalContrato ? d.importeAcumEjec / subtotalContrato : 0
+  };
+}
+
 const DEFAULT_PRINT_CFG = {
   modo: 'estimacion',          // 'estimacion' | 'estadoCuenta'
   soloMovimiento: true,        // en modo estimación, solo conceptos con avance en esta estim
