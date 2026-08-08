@@ -8,6 +8,7 @@ import { renderShell } from './shell.js';
 import { loadObra, ensureCatalogoBaseline, listOrdenesCambio, saveOrdenCambio, deleteOrdenCambio } from '../services/db.js';
 import { money, num, dateMx } from '../util/format.js';
 import { navigate } from '../state/router.js';
+import { computeEjecutadoPorConcepto } from '../services/export.js';
 
 const TIPO_LABEL = { aditiva: 'Aditiva', deductiva: 'Deductiva', mixta: 'Mixta' };
 const ESTADO_TAG = {
@@ -71,6 +72,8 @@ export async function renderOrdenesCambio({ params }) {
   // Congela el baseline (contrato original) la 1ª vez.
   const baseline = await ensureCatalogoBaseline(obraId);
   const ocs = await listOrdenesCambio(obraId);
+  // Ejecutado acumulado por concepto (tope de deductivas: no bajar de lo ejecutado).
+  const ejecutadoPorConcepto = computeEjecutadoPorConcepto(obra);
 
   const contratoOriginal = sumaPU(baseline?.conceptos || conceptosMap);
   const contratoVigente = sumaPU(conceptosMap);
@@ -262,25 +265,32 @@ export async function renderOrdenesCambio({ params }) {
       function refreshInfo(resetCant) {
         const c = conceptosMap[sel.value];
         if (!c) { info.textContent = ''; impacto.textContent = ''; return; }
-        info.textContent = `Actual: ${num(c.cantidad, 2)} ${c.unidad || ''} × ${money(c.precio_unitario)} = ${money(c.total)}`;
+        const ejec = Number(ejecutadoPorConcepto[sel.value]) || 0, u = c.unidad || '';
+        info.innerHTML = '';
+        info.appendChild(h('span', {}, `Contratado: ${num(c.cantidad, 2)} ${u} × ${money(c.precio_unitario)} = ${money(c.total)}`));
+        info.appendChild(h('span', { style: { marginLeft: '10px' } }, ['· Ejecutado a la fecha: ', h('b', { class: ejec > 0 ? 'accent' : 'muted' }, `${num(ejec, 2)} ${u}`)]));
         if (accion === 'quitar' && resetCant) cantIn.value = Number(c.cantidad) || 0;   // default: quitar todo
         refreshImpacto();
       }
       function refreshImpacto() {
         const c = conceptosMap[sel.value]; if (!c) { impacto.textContent = ''; return; }
-        const pu = Number(c.precio_unitario) || 0, actual = Number(c.cantidad) || 0, v = Number(cantIn.value);
-        if (isNaN(v)) { impacto.textContent = ''; return; }
+        const pu = Number(c.precio_unitario) || 0, actual = Number(c.cantidad) || 0;
+        const ejec = Number(ejecutadoPorConcepto[sel.value]) || 0, u = c.unidad || '';
+        const v = Number(cantIn.value);
+        impacto.innerHTML = '';
+        if (isNaN(v)) return;
         if (accion === 'quitar') {
-          impacto.innerHTML = '';
+          const maxQuitar = Math.max(0, actual - ejec);   // no bajar de lo ejecutado
           impacto.appendChild(h('span', { class: 'warn' }, `Deductivo: −${money(v * pu)}`));
-          if (v > actual) impacto.appendChild(h('span', { class: 'warn', style: { marginLeft: '8px' } }, `⚠ no puedes quitar más de ${num(actual, 2)}`));
-          else impacto.appendChild(h('span', { class: 'muted', style: { marginLeft: '8px' } }, `queda ${num(actual - v, 2)} ${c.unidad || ''}`));
+          if (v > actual) impacto.appendChild(h('span', { class: 'warn', style: { marginLeft: '8px' } }, `⚠ excede lo contratado (${num(actual, 2)})`));
+          else if (v > maxQuitar) impacto.appendChild(h('span', { class: 'warn', style: { marginLeft: '8px' } }, `⚠ dejaría por debajo de lo ejecutado (${num(ejec, 2)}); máx a quitar ${num(maxQuitar, 2)}`));
+          else impacto.appendChild(h('span', { class: 'muted', style: { marginLeft: '8px' } }, `queda ${num(actual - v, 2)} ${u}`));
         } else {
           const delta = (v - actual) * pu;
-          impacto.innerHTML = '';
           impacto.appendChild(delta >= 0
             ? h('span', { class: 'ok' }, `Aditivo: +${money(delta)}`)
             : h('span', { class: 'warn' }, `Deductivo: −${money(-delta)}`));
+          if (v < ejec) impacto.appendChild(h('span', { class: 'warn', style: { marginLeft: '8px' } }, `⚠ por debajo de lo ejecutado (${num(ejec, 2)})`));
         }
       }
       sel.addEventListener('change', () => refreshInfo(true));
@@ -293,13 +303,19 @@ export async function renderOrdenesCambio({ params }) {
           info,
           h('div', { class: 'field', style: { marginTop: '10px' } }, [h('label', {}, accion === 'modificar' ? 'Nueva cantidad (total)' : 'Cantidad a quitar'), cantIn]),
           impacto,
-          accion === 'quitar' && h('p', { class: 'muted', style: { fontSize: '11px', marginTop: '8px' } }, 'Deja la cantidad completa para quitar el concepto entero, o pon menos para quitar solo una parte. Al aplicar la OC no se podrá quitar por debajo de lo ya ejecutado (validación en la fase de aplicación).')
+          accion === 'quitar' && h('p', { class: 'muted', style: { fontSize: '11px', marginTop: '8px' } }, 'Deja la cantidad completa para quitar el concepto entero, o pon menos para quitar solo una parte. No se puede quitar por debajo de lo ya ejecutado.')
         ]),
         confirmLabel: 'Agregar cambio',
         onConfirm: () => {
           if (cantIn.value === '' || isNaN(Number(cantIn.value))) { toast('Captura la cantidad', 'warn'); return false; }
-          const c = conceptosMap[sel.value];
-          if (accion === 'quitar' && Number(cantIn.value) > (Number(c?.cantidad) || 0)) { toast('No puedes quitar más de la cantidad contratada', 'warn'); return false; }
+          const c = conceptosMap[sel.value]; const v = Number(cantIn.value);
+          const actual = Number(c?.cantidad) || 0, ejec = Number(ejecutadoPorConcepto[sel.value]) || 0;
+          if (accion === 'quitar') {
+            if (v > actual) { toast('No puedes quitar más de lo contratado', 'warn'); return false; }
+            if (v > actual - ejec) { toast(`Dejaría por debajo de lo ejecutado (${num(ejec, 2)}). Máx a quitar: ${num(actual - ejec, 2)}`, 'warn'); return false; }
+          } else if (v < ejec) {
+            toast(`La nueva cantidad no puede ser menor a lo ejecutado (${num(ejec, 2)})`, 'warn'); return false;
+          }
           return true;
         }
       });

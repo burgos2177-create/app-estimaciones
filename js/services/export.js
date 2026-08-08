@@ -538,6 +538,18 @@ export function computeAvanceObra(obra) {
   };
 }
 
+// Cantidad EJECUTADA acumulada por concepto (excluye proyección). Para el módulo
+// de Órdenes de Cambio: no se puede deducir por debajo de lo ya ejecutado.
+export function computeEjecutadoPorConcepto(obra) {
+  const conceptosAll = obra.catalogo?.conceptos || {};
+  const ejecMap = buildExecMap(conceptosAll, obra.generadores || {}, obra.avances || {}, obra.catalogo?.migrationKeyMap, obra.estimaciones || {});
+  const out = {};
+  for (const [cid, byEst] of Object.entries(ejecMap)) {
+    out[cid] = Object.values(byEst).reduce((s, x) => s + (Number(x) || 0), 0);
+  }
+  return out;
+}
+
 function _ymd(v) {
   if (v == null || v === '') return null;
   if (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}/.test(v)) return v.slice(0, 10);
