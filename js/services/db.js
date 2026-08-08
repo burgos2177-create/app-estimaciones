@@ -534,6 +534,13 @@ export async function getProyectosBitacora() {
   return Array.isArray(arr) ? arr : Object.values(arr);
 }
 
+// Publica un resumen de avance de la obra en /shared/avanceObra/{obraId} para que
+// la app contadora (bitácora) lea "lo ejecutado a precio de catálogo" y calcule su
+// lectura financiera (PnL realizado vs flotante) sin duplicar la lógica de OPUS.
+export async function setAvanceObra(obraId, summary) {
+  return rset(`/shared/avanceObra/${obraId}`, { ...summary, updatedAt: Date.now(), origenApp: 'estimaciones' });
+}
+
 // Estado operativo de cada obra ('activo' | 'pausa' | 'terminado').
 //
 // Aquí NO se guarda estado: la fuente única es el proyecto contable de

@@ -4,7 +4,7 @@
 
 import { h, modal, toast, buzonBadge } from '../util/dom.js';
 import { renderShell } from './shell.js';
-import { rread, loadObra, setPagoCliente, setEstimacionIvaMonto, updateObraMeta, getObraLinks, listBuzonItems, pushBuzonItem, updateBuzonItem } from '../services/db.js';
+import { rread, loadObra, setPagoCliente, setEstimacionIvaMonto, updateObraMeta, getObraLinks, listBuzonItems, pushBuzonItem, updateBuzonItem, setAvanceObra } from '../services/db.js';
 import { state } from '../state/store.js';
 import { money, num, dateMx, pct } from '../util/format.js';
 import { buildResumenData, exportResumenPdf, exportResumenXlsx, exportEstimacionJson } from '../services/export.js';
@@ -54,6 +54,24 @@ async function draw(obraId, obra, estId) {
   const estsArr = Object.entries(ests).map(([id, e]) => ({ id, ...e })).sort((a, b) => (a.numero || 0) - (b.numero || 0));
   const data = buildResumenData(obra, estId);
   const { est, ivaPct, anticipoPct, rows, subtotalEsta, ivaEsta, ivaAcum, ivaManual, importeEsta, avPond, importeAcumEjec, importeAcumEjecCIVA, subtotalPagado, ivaPagado, importePagado, diferencia, diferenciaPct, anticipoMontoBase, amortizacionEsta, amortizacionAcum, saldoAnticipoPorAmortizar, netoEsta, netoAcum, anticipoRecibido, totalRecibidoCliente, saldoCaja, excesoAnticipo, abonosCliente, subtotalAbono, sugeridoPagoJusto, amortizacionAcumHasta, netoAcumHasta, pagosPrevios, subtotalRecibidoCaja, ivaRecibidoCaja, saldoSubtotalCaja, ivaEjecCaja, saldoIvaCaja } = data;
+
+  // Publica el avance a /shared para bitácora (lo ejecutado a precio de catálogo,
+  // etc.). Fire-and-forget: no bloquea el render si falla.
+  const subtotalContrato = Number(obra.integracion?.subtotal_venta) || ((Number(m.montoContratoCIVA) || 0) / (1 + (ivaPct || 0.16)));
+  try {
+    setAvanceObra(obraId, {
+      obraNombre: m.nombre || '',
+      contratoCIVA: Number(m.montoContratoCIVA) || 0,
+      contratoSubtotal: subtotalContrato,
+      ejecutadoCatalogoSubtotal: importeAcumEjec,     // valor de VENTA de la obra ejecutada (sin IVA)
+      ejecutadoCatalogoCIVA: importeAcumEjecCIVA,
+      ivaEjecutado: ivaAcum,
+      netoACobrarAcum: netoAcum,                      // ya amortizado el anticipo
+      cobradoEstimaciones: importePagado,             // pagos de estimaciones (sin anticipo)
+      anticipoRecibido,
+      avancePct: subtotalContrato ? importeAcumEjec / subtotalContrato : 0
+    });
+  } catch {}
 
   const estSel = h('select', { onchange: e => { draw(obraId, obra, e.target.value); } },
     estsArr.map(es => h('option', { value: es.id, selected: es.id === estId }, `Estimación #${es.numero}`)));
