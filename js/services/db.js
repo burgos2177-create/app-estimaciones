@@ -550,6 +550,41 @@ export async function setAvanceObra(obraId, summary) {
   return rset(`/shared/avanceObra/${obraId}`, { ...summary, updatedAt: Date.now(), origenApp: 'estimaciones' });
 }
 
+// === Órdenes de Cambio (aditivas/deductivas) — Fase 1: baseline + borradores ===
+// El baseline es un snapshot INMUTABLE del catálogo original (contrato firmado).
+// Se congela la 1ª vez que se entra al módulo. El catálogo vigente (/shared/
+// catalogos/{obraId}/conceptos) que leen las apps NO se toca en Fase 1.
+export async function ensureCatalogoBaseline(obraId) {
+  const existing = await rread(`/shared/catalogos/${obraId}/baseline`);
+  if (existing && existing.conceptos) return existing;
+  const conceptos = (await rread(`/shared/catalogos/${obraId}/conceptos`))
+    || (await rread(`obras/${obraId}/catalogo/conceptos`));
+  if (!conceptos) return null;
+  const baseline = { conceptos, congeladoAt: Date.now() };
+  await rset(`/shared/catalogos/${obraId}/baseline`, baseline);
+  return baseline;
+}
+export async function getCatalogoBaseline(obraId) {
+  return await rread(`/shared/catalogos/${obraId}/baseline`);
+}
+export async function listOrdenesCambio(obraId) {
+  return (await rread(`/shared/catalogos/${obraId}/ordenesCambio`)) || {};
+}
+export async function saveOrdenCambio(obraId, oc) {
+  const base = `/shared/catalogos/${obraId}/ordenesCambio`;
+  const id = oc.id;
+  const payload = { ...oc, updatedAt: Date.now() };
+  delete payload.id;
+  if (id) { await rupdate(`${base}/${id}`, payload); return id; }
+  const all = await listOrdenesCambio(obraId);
+  payload.numero = Math.max(0, ...Object.values(all).map(o => o.numero || 0)) + 1;
+  payload.creadoAt = Date.now();
+  return await rpush(base, payload);
+}
+export async function deleteOrdenCambio(obraId, ocId) {
+  return rremove(`/shared/catalogos/${obraId}/ordenesCambio/${ocId}`);
+}
+
 // Estado operativo de cada obra ('activo' | 'pausa' | 'terminado').
 //
 // Aquí NO se guarda estado: la fuente única es el proyecto contable de

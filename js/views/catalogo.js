@@ -100,8 +100,14 @@ export async function renderCatalogo({ params }) {
         h('div', { style: { flex: 1 } }),
         h('div', {}, [h('span', { class: 'muted' }, 'PUs: '), h('b', {}, num0(numPUs))]),
         h('button', {
-          class: 'btn ghost sm',
+          class: 'btn sm',
           style: { marginLeft: '12px' },
+          title: 'Aditivas / deductivas de conceptos. Congela el contrato original y cotiza el cambio de alcance sin tocar el catálogo vigente.',
+          onClick: () => navigate('/obras/' + obraId + '/ordenes-cambio')
+        }, '📋 Órdenes de cambio'),
+        h('button', {
+          class: 'btn ghost sm',
+          style: { marginLeft: '8px' },
           title: 'Descarga el catálogo en nuestro formato (re-importable en las apps SGR) para sembrar otra obra',
           onClick: () => {
             try { exportCatalogoOpusXlsx(obraFull); toast('Catálogo exportado en formato SGR', 'ok'); }
