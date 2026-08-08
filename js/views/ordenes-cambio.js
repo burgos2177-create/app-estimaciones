@@ -216,24 +216,39 @@ export async function renderOrdenesCambio({ params }) {
         ]);
       }
       const accionTag = { agregar: ['ok', '＋ Agregar'], modificar: ['muted', '✎ Modificar'], quitar: ['warn', '－ Quitar'] }[it.accion] || ['muted', it.accion];
-      return h('tr', {}, [
+      return h('tr', {
+        style: readonly ? {} : { cursor: 'pointer' },
+        onClick: readonly ? null : () => editItem(idx)
+      }, [
         h('td', {}, h('span', { class: 'tag ' + accionTag[0] }, accionTag[1])),
         h('td', {}, detalle),
         h('td', { class: 'num ok' }, im.aditivo ? '+' + money(im.aditivo) : ''),
         h('td', { class: 'num warn' }, im.deductivo ? '−' + money(im.deductivo) : ''),
-        h('td', {}, !readonly && h('button', { class: 'btn sm danger ghost', onClick: () => { work.items.splice(idx, 1); renderItems(); } }, '✕'))
+        h('td', { style: { whiteSpace: 'nowrap' } }, !readonly && [
+          h('button', { class: 'btn sm ghost', title: 'Ver / editar esta partida', onClick: (e) => { e.stopPropagation(); editItem(idx); } }, '✎'),
+          h('button', { class: 'btn sm danger ghost', style: { marginLeft: '4px' }, title: 'Quitar esta partida del cambio', onClick: (e) => { e.stopPropagation(); work.items.splice(idx, 1); renderItems(); } }, '✕')
+        ])
       ]);
     }
 
-    // --- diálogos para agregar cada tipo de partida ---
-    async function addAgregar() {
-      const clave = h('input', { placeholder: 'Clave (opcional)' });
-      const desc = h('input', { placeholder: 'Descripción del concepto nuevo' });
-      const unidad = h('input', { placeholder: 'Unidad (m2, m3, pza…)', style: { width: '120px' } });
-      const cantidad = h('input', { type: 'number', step: 'any', placeholder: '0' });
-      const pu = h('input', { type: 'number', step: '0.01', placeholder: '0.00' });
+    // Abre el diálogo correcto pre-llenado para ver/editar una partida existente.
+    function editItem(idx) {
+      const it = work.items[idx];
+      if (!it) return;
+      if (it.accion === 'agregar') addAgregar(idx);
+      else addSobreConcepto(it.accion, idx);
+    }
+
+    // --- diálogos para agregar/editar cada tipo de partida (editIdx = editar en sitio) ---
+    async function addAgregar(editIdx) {
+      const cur = (editIdx != null) ? work.items[editIdx] : null;
+      const clave = h('input', { placeholder: 'Clave (opcional)', value: cur?.clave || '' });
+      const desc = h('input', { placeholder: 'Descripción del concepto nuevo', value: cur?.descripcion || '' });
+      const unidad = h('input', { placeholder: 'Unidad (m2, m3, pza…)', style: { width: '120px' }, value: cur?.unidad || '' });
+      const cantidad = h('input', { type: 'number', step: 'any', placeholder: '0', value: cur?.cantidad ?? '' });
+      const pu = h('input', { type: 'number', step: '0.01', placeholder: '0.00', value: cur?.pu ?? '' });
       const ok = await modal({
-        title: 'Agregar concepto (aditiva)',
+        title: cur ? 'Editar concepto agregado' : 'Agregar concepto (aditiva)',
         body: h('div', {}, [
           h('div', { class: 'field' }, [h('label', {}, 'Descripción *'), desc]),
           h('div', { class: 'grid-2', style: { marginTop: '10px' } }, [
@@ -245,21 +260,24 @@ export async function renderOrdenesCambio({ params }) {
             h('div', { class: 'field' }, [h('label', {}, 'P.U.'), pu])
           ])
         ]),
-        confirmLabel: 'Agregar', onConfirm: () => {
+        confirmLabel: cur ? 'Guardar' : 'Agregar', onConfirm: () => {
           if (!desc.value.trim()) { toast('La descripción es requerida', 'warn'); return false; }
           return true;
         }
       });
       if (!ok) return;
-      work.items.push({ accion: 'agregar', clave: clave.value.trim(), descripcion: desc.value.trim(), unidad: unidad.value.trim(), cantidad: Number(cantidad.value) || 0, pu: Number(pu.value) || 0 });
+      const item = { accion: 'agregar', clave: clave.value.trim(), descripcion: desc.value.trim(), unidad: unidad.value.trim(), cantidad: Number(cantidad.value) || 0, pu: Number(pu.value) || 0 };
+      if (editIdx != null) work.items[editIdx] = item; else work.items.push(item);
       renderItems();
     }
 
-    async function addSobreConcepto(accion) {
+    async function addSobreConcepto(accion, editIdx) {
       if (!puConceptos.length) { toast('No hay conceptos en el catálogo', 'warn'); return; }
+      const cur = (editIdx != null) ? work.items[editIdx] : null;
       const sel = h('select', { style: { width: '100%' } }, puConceptos.map(c => h('option', { value: c.id }, `${c.clave || ''} — ${(c.descripcion || '').slice(0, 70)}`)));
+      if (cur?.conceptoId) sel.value = cur.conceptoId;
       // modificar → nueva cantidad absoluta; quitar → cantidad A QUITAR (default: la completa)
-      const cantIn = h('input', { type: 'number', step: 'any', placeholder: accion === 'modificar' ? 'Nueva cantidad' : 'Cantidad a quitar' });
+      const cantIn = h('input', { type: 'number', step: 'any', placeholder: accion === 'modificar' ? 'Nueva cantidad' : 'Cantidad a quitar', value: cur ? (accion === 'modificar' ? (cur.despues ?? '') : (cur.cantidad ?? '')) : '' });
       const info = h('div', { class: 'muted', style: { fontSize: '12px', marginTop: '8px' } });
       const impacto = h('div', { style: { fontSize: '12px', marginTop: '6px' } });
       function refreshInfo(resetCant) {
@@ -295,9 +313,9 @@ export async function renderOrdenesCambio({ params }) {
       }
       sel.addEventListener('change', () => refreshInfo(true));
       cantIn.addEventListener('input', refreshImpacto);
-      refreshInfo(true);
+      refreshInfo(cur ? false : true);   // al editar NO reinicies la cantidad capturada
       const ok = await modal({
-        title: accion === 'modificar' ? 'Modificar cantidad (aditiva/deductiva)' : 'Quitar cantidad (deductiva)',
+        title: (cur ? 'Editar — ' : '') + (accion === 'modificar' ? 'Modificar cantidad (aditiva/deductiva)' : 'Quitar cantidad (deductiva)'),
         body: h('div', {}, [
           h('div', { class: 'field' }, [h('label', {}, 'Concepto del catálogo'), sel]),
           info,
@@ -305,7 +323,7 @@ export async function renderOrdenesCambio({ params }) {
           impacto,
           accion === 'quitar' && h('p', { class: 'muted', style: { fontSize: '11px', marginTop: '8px' } }, 'Deja la cantidad completa para quitar el concepto entero, o pon menos para quitar solo una parte. No se puede quitar por debajo de lo ya ejecutado.')
         ]),
-        confirmLabel: 'Agregar cambio',
+        confirmLabel: cur ? 'Guardar' : 'Agregar cambio',
         onConfirm: () => {
           if (cantIn.value === '' || isNaN(Number(cantIn.value))) { toast('Captura la cantidad', 'warn'); return false; }
           const c = conceptosMap[sel.value]; const v = Number(cantIn.value);
@@ -320,8 +338,10 @@ export async function renderOrdenesCambio({ params }) {
         }
       });
       if (!ok) return;
-      if (accion === 'modificar') work.items.push({ accion, conceptoId: sel.value, despues: Number(cantIn.value) || 0 });
-      else work.items.push({ accion, conceptoId: sel.value, cantidad: Number(cantIn.value) || 0 });
+      const item = accion === 'modificar'
+        ? { accion, conceptoId: sel.value, despues: Number(cantIn.value) || 0 }
+        : { accion, conceptoId: sel.value, cantidad: Number(cantIn.value) || 0 };
+      if (editIdx != null) work.items[editIdx] = item; else work.items.push(item);
       renderItems();
     }
 
