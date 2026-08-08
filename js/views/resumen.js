@@ -80,6 +80,7 @@ async function draw(obraId, obra, estId) {
     h('h1', { style: { margin: 0 } }, 'RESUMEN'),
     estSel,
     h('span', {}, est.estado === 'cerrada' ? h('span', { class: 'tag ok' }, '🔒 Cerrada') : h('span', { class: 'tag warn' }, '✎ Borrador')),
+    est.esProyeccion && h('span', { class: 'tag', style: { borderColor: '#a06bd9', color: '#a06bd9' }, title: 'Esta estimación está marcada como proyección, por eso no aparece en los acumulados' }, '🔮 Proyección (no cuenta)'),
     h('div', { style: { flex: 1 } }),
     h('button', { class: 'btn ghost', onClick: () => exportEstimacionJson(obra, estId), title: 'Exportar JSON para app contable SOGRUB' }, '{ } JSON'),
     h('button', { class: 'btn', onClick: () => printConfigDialog(obra, estId, 'xlsx') }, '⬇ XLSX'),

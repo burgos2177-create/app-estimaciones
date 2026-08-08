@@ -494,6 +494,15 @@ export async function deleteGenerador(obraId, gid) {
 export async function setAvance(obraId, conceptoId, estimacionId, cantidad) {
   await set(_ref(`obras/${obraId}/avances/${conceptoId}/${estimacionId}`), Number(cantidad) || 0);
 }
+// Modo "proyección": marca una estimación completa o un generador como NO real,
+// para llenar escenarios sin ensuciar los acumulados (F-1, RESUMEN, ejecutado a
+// catálogo). buildExecMap ignora lo marcado. Se puede alternar para ver con/sin.
+export async function setEstimacionProyeccion(obraId, estId, val) {
+  await set(_ref(`obras/${obraId}/estimaciones/${estId}/esProyeccion`), val === true);
+}
+export async function setGeneradorProyeccion(obraId, gid, val) {
+  await set(_ref(`obras/${obraId}/generadores/${gid}/esProyeccion`), val === true);
+}
 
 // Mueve un generador una posición arriba (dir=-1) o abajo (dir=+1) dentro de su
 // estimación, intercambiándolo con el vecino y renumerando 1..N sin huecos.

@@ -38,9 +38,11 @@ export async function renderGenerador({ params }) {
   const conceptoKey = resolveConceptoKeyLocal(obra, gen.conceptoId);
   const cantContratada = Number(concepto.cantidad) || 0;
   const ejecPrevio = (() => {
+    const estProy = (eid) => !!(obra.estimaciones?.[eid]?.esProyeccion);
     const byEst = {};
     for (const [id, g] of Object.entries(obra.generadores || {})) {
       if (id === gid) continue;
+      if (g.esProyeccion || estProy(g.estimacionId)) continue;   // proyección: no cuenta
       if (resolveConceptoKeyLocal(obra, g.conceptoId) !== conceptoKey) continue;
       const q = g.totalEjecutado != null ? Number(g.totalEjecutado) : calcGeneradorTotal(concepto, g);
       byEst[g.estimacionId] = (byEst[g.estimacionId] || 0) + q;
@@ -49,6 +51,7 @@ export async function renderGenerador({ params }) {
       if (resolveConceptoKeyLocal(obra, cid) !== conceptoKey) continue;
       for (const [eid, cant] of Object.entries(byEstAv || {})) {
         if (byEst[eid] != null) continue;   // ya cubierto por un generador
+        if (estProy(eid)) continue;
         byEst[eid] = Number(cant) || 0;
       }
     }

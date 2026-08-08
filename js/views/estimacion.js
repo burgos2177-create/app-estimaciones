@@ -1,6 +1,6 @@
 import { h, modal, toast } from '../util/dom.js';
 import { renderShell } from './shell.js';
-import { loadObra, getConceptoById, resolveConceptoKeyLocal, createGenerador, setAvance, deleteGenerador, moveGenerador } from '../services/db.js';
+import { loadObra, getConceptoById, resolveConceptoKeyLocal, createGenerador, setAvance, deleteGenerador, moveGenerador, setEstimacionProyeccion, setGeneradorProyeccion } from '../services/db.js';
 import { state } from '../state/store.js';
 import { navigate } from '../state/router.js';
 import { money, dateMx, num, num0, pct } from '../util/format.js';
@@ -52,17 +52,36 @@ export async function renderEstimacion({ params }) {
     } catch (err) { toast('Error: ' + err.message, 'danger'); }
   }
 
-  // Subtotal calculado
+  // Modo proyección: la estimación completa, o un generador, se marca como "no
+  // cuenta" (escenario) y se excluye de los acumulados. Se alterna para ver con/sin.
+  const estProyeccion = est.esProyeccion === true;
+  async function toggleEstProyeccion() {
+    try {
+      await setEstimacionProyeccion(obraId, estId, !estProyeccion);
+      renderEstimacion({ params: { id: obraId, estid: estId } });
+    } catch (err) { toast('Error: ' + err.message, 'danger'); }
+  }
+  async function toggleGenProyeccion(gid, actual) {
+    try {
+      await setGeneradorProyeccion(obraId, gid, !actual);
+      renderEstimacion({ params: { id: obraId, estid: estId } });
+    } catch (err) { toast('Error: ' + err.message, 'danger'); }
+  }
+
+  // Subtotal calculado (excluye lo marcado como proyección para que cuadre con
+  // los acumulados; la estimación-proyección igual muestra su total propio).
   let subtotal = 0;
   const generadoresRows = gensInEstim.map(([gid, g], idx) => {
     const c = getConceptoById(obra, g.conceptoId);
     const cant = c ? calcGeneradorTotal(c, g) : 0;
     const importe = cant * (c?.precio_unitario || 0);
-    subtotal += importe;
+    const genProy = g.esProyeccion === true;
+    if (!genProy) subtotal += importe;
     const overrun = c && cant > (c.cantidad || 0);
+    const noCuenta = genProy || estProyeccion;
     return h('tr', {
       class: overrun ? 'row-overrun' : '',
-      style: { cursor: 'pointer' },
+      style: { cursor: 'pointer', opacity: noCuenta ? '0.5' : '1' },
       onClick: () => navigate(`/obras/${obraId}/estimaciones/${estId}/generadores/${gid}`)
     }, [
       h('td', {}, h('b', {}, '#' + g.numero)),
@@ -73,7 +92,13 @@ export async function renderEstimacion({ params }) {
       h('td', { class: 'num muted' }, money(c?.precio_unitario)),
       h('td', { class: 'num' }, h('b', {}, money(importe))),
       h('td', { style: { whiteSpace: 'nowrap' } }, [
-        overrun ? h('span', { class: 'tag warn' }, '⚠ sobreejec.') : h('span', { class: 'tag muted' }, PLANTILLAS[g.plantillaTipo]?.label || '—'),
+        genProy ? h('span', { class: 'tag', style: { borderColor: '#a06bd9', color: '#a06bd9' }, title: 'Este generador no cuenta en los acumulados' }, '🔮 proyección')
+          : (overrun ? h('span', { class: 'tag warn' }, '⚠ sobreejec.') : h('span', { class: 'tag muted' }, PLANTILLAS[g.plantillaTipo]?.label || '—')),
+        editable && h('button', {
+          class: 'btn sm ghost', style: { marginLeft: '6px', color: genProy ? '#a06bd9' : '' },
+          title: genProy ? 'Marcado como proyección — click para que SÍ cuente' : 'Marcar como proyección (no cuenta en acumulados)',
+          onClick: (e) => { e.stopPropagation(); toggleGenProyeccion(gid, genProy); }
+        }, '🔮'),
         editable && h('button', {
           class: 'btn sm ghost', style: { marginLeft: '6px' }, disabled: idx === 0,
           title: 'Subir (intercambia con el anterior)',
@@ -122,6 +147,12 @@ export async function renderEstimacion({ params }) {
     h('div', {}, est.estado === 'cerrada'
       ? h('span', { class: 'tag ok' }, '🔒 Cerrada')
       : h('span', { class: 'tag warn' }, '✎ Borrador')),
+    estProyeccion && h('span', { class: 'tag', style: { borderColor: '#a06bd9', color: '#a06bd9' }, title: 'Toda esta estimación es un escenario: no cuenta en F-1, RESUMEN ni ejecutado a catálogo' }, '🔮 Proyección (no cuenta)'),
+    editable && h('button', {
+      class: 'btn sm ' + (estProyeccion ? 'primary' : 'ghost'),
+      title: estProyeccion ? 'Proyección activa: esta estimación no cuenta en acumulados. Click para volverla real.' : 'Marcar TODA la estimación como proyección (escenario que no cuenta en acumulados)',
+      onClick: toggleEstProyeccion
+    }, estProyeccion ? '🔮 Proyección: ON' : '🔮 Proyección'),
     h('div', { style: { flex: 1 } }),
     h('button', {
       class: 'btn',

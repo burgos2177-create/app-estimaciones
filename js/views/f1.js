@@ -33,9 +33,12 @@ export async function renderF1({ params }) {
 
   // Cantidad ejecutada por (concepto, estimación). conceptoIds en generadores y
   // avances pueden ser legacy o conceptoKey: los resolvemos al iterar.
+  // Modo proyección: no cuenta lo marcado (generador o estimación completa).
+  const estProy = (eid) => !!(estimaciones[eid] && estimaciones[eid].esProyeccion);
   const ejecMap = {};
   for (const c of conceptosArr) ejecMap[c.id] = {};
   for (const g of Object.values(generadores)) {
+    if (g.esProyeccion || estProy(g.estimacionId)) continue;
     const k = resolveConceptoKeyLocal(obra, g.conceptoId);
     if (!k || !ejecMap[k]) continue;
     const concepto = conceptos[k];
@@ -47,6 +50,7 @@ export async function renderF1({ params }) {
     if (!k || !ejecMap[k]) continue;
     for (const [eid, cant] of Object.entries(byEst)) {
       if (ejecMap[k][eid] != null) continue;
+      if (estProy(eid)) continue;
       ejecMap[k][eid] = Number(cant) || 0;
     }
   }

@@ -35,10 +35,14 @@ function resolveKey(conceptos, migrationKeyMap, id) {
   return null;
 }
 
-function buildExecMap(conceptos, generadores, avances, migrationKeyMap) {
+function buildExecMap(conceptos, generadores, avances, migrationKeyMap, estimaciones = {}) {
+  // Modo proyección: los generadores marcados (o cualquiera de una estimación
+  // marcada) NO cuentan en los acumulados. Igual para avances directos.
+  const estProy = (eid) => !!(estimaciones && estimaciones[eid] && estimaciones[eid].esProyeccion);
   const ejecMap = {};
   for (const cid of Object.keys(conceptos)) ejecMap[cid] = {};
   for (const g of Object.values(generadores || {})) {
+    if (g.esProyeccion || estProy(g.estimacionId)) continue;
     const k = resolveKey(conceptos, migrationKeyMap, g.conceptoId);
     if (!k || !ejecMap[k]) continue;
     const c = conceptos[k];
@@ -50,6 +54,7 @@ function buildExecMap(conceptos, generadores, avances, migrationKeyMap) {
     if (!k || !ejecMap[k]) continue;
     for (const [eid, cant] of Object.entries(byEst)) {
       if (ejecMap[k][eid] != null) continue;
+      if (estProy(eid)) continue;
       ejecMap[k][eid] = Number(cant) || 0;
     }
   }
@@ -64,7 +69,7 @@ export function exportF1Xlsx(obra) {
   const m = obra.meta || {};
   const conceptos = filterCatalogo(obra.catalogo?.conceptos || {});
   const estims = sortedEstims(obra.estimaciones || {});
-  const ejecMap = buildExecMap(obra.catalogo?.conceptos || {}, obra.generadores || {}, obra.avances || {}, obra.catalogo?.migrationKeyMap);
+  const ejecMap = buildExecMap(obra.catalogo?.conceptos || {}, obra.generadores || {}, obra.avances || {}, obra.catalogo?.migrationKeyMap, obra.estimaciones || {});
 
   const totalPpto = conceptos.reduce((s, c) => s + (c.total || 0), 0);
 
@@ -162,7 +167,7 @@ export function exportF1Pdf(obra) {
   const m = obra.meta || {};
   const conceptos = filterCatalogo(obra.catalogo?.conceptos || {});
   const estims = sortedEstims(obra.estimaciones || {});
-  const ejecMap = buildExecMap(obra.catalogo?.conceptos || {}, obra.generadores || {}, obra.avances || {}, obra.catalogo?.migrationKeyMap);
+  const ejecMap = buildExecMap(obra.catalogo?.conceptos || {}, obra.generadores || {}, obra.avances || {}, obra.catalogo?.migrationKeyMap, obra.estimaciones || {});
 
   const { jsPDF } = window.jspdf;
   const doc = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'letter' });
@@ -364,7 +369,7 @@ export function buildResumenData(obra, estId) {
   const conceptosAll = obra.catalogo?.conceptos || {};
   const conceptos = filterCatalogo(conceptosAll);
   const estims = sortedEstims(obra.estimaciones || {});
-  const ejecMap = buildExecMap(conceptosAll, obra.generadores || {}, obra.avances || {}, obra.catalogo?.migrationKeyMap);
+  const ejecMap = buildExecMap(conceptosAll, obra.generadores || {}, obra.avances || {}, obra.catalogo?.migrationKeyMap, obra.estimaciones || {});
   const ivaPct = Number(m.ivaPct ?? 0.16);
   const anticipoPct = Number(m.anticipoPct ?? 0);
 
