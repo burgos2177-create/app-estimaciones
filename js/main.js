@@ -19,7 +19,7 @@ import { renderSubcontrato } from './views/subcontrato.js';
 import { renderSubEstimacion } from './views/sub-estimacion.js';
 import { renderGaleria } from './views/galeria.js';
 import { renderBitacora } from './views/bitacora.js';
-import { renderConcepto } from './views/stubs.js';
+import { renderConcepto } from './views/concepto.js';
 import { h, mount } from './util/dom.js';
 
 route('/',                                                       () => renderObrasList());

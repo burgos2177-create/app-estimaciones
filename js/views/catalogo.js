@@ -152,8 +152,9 @@ function renderRow(c, obraId) {
   const indent = c.nivel * 16;
   const arch = c.archivado ? h('span', { class: 'tag warn' }, 'archivado') : '';
   const plant = c.plantillaTipo ? h('span', { class: 'tag muted' }, c.plantillaTipo) : '';
-  const action = !isAgr && !c.archivado
-    ? h('button', { class: 'btn sm', onClick: (e) => { e.stopPropagation(); navigate(`/obras/${obraId}/conceptos/${c.id}`); } }, 'Abrir')
+  // Los agrupadores también abren: muestran el avance consolidado de la partida.
+  const action = !c.archivado
+    ? h('button', { class: 'btn sm' + (isAgr ? ' ghost' : ''), onClick: (e) => { e.stopPropagation(); navigate(`/obras/${obraId}/conceptos/${c.id}`); } }, isAgr ? 'Avance' : 'Abrir')
     : null;
 
   return h('tr', { class: cls }, [
