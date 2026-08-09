@@ -2,7 +2,7 @@
 // Intenta traer código fresco de la red; si la red falla (típico en obra),
 // cae al caché; si es una navegación sin caché, sirve el shell para que la app
 // igual arranque. NUNCA devuelve vacío → nunca el error "Load failed" en blanco.
-const CACHE = 'estim-cache-v3';
+const CACHE = 'estim-cache-v4';
 
 self.addEventListener('install', () => self.skipWaiting());
 self.addEventListener('activate', (e) => e.waitUntil((async () => {

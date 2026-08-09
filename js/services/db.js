@@ -321,10 +321,14 @@ async function reconcileCatalogoShared(obraId, nuevosConceptos, sourceFileName, 
     };
   }
 
-  // Conservar archivados los previos cuya identidad ya no existe pero tienen refs
+  // Conservar archivados los previos cuya identidad ya no existe pero tienen refs.
+  // Los conceptos agregados por una Orden de Cambio aplicada (ocOrigen) NO están
+  // en el XLS de OPUS; se preservan ACTIVOS para no perder la aditiva al reimportar.
   for (const [k, c] of Object.entries(prev)) {
     if (merged[k]) continue;
-    if (referenciadasKeys.has(k)) {
+    if (c.ocOrigen) {
+      merged[k] = { ...c };
+    } else if (referenciadasKeys.has(k)) {
       merged[k] = { ...c, archivado: true };
     }
   }
@@ -583,6 +587,38 @@ export async function saveOrdenCambio(obraId, oc) {
 }
 export async function deleteOrdenCambio(obraId, ocId) {
   return rremove(`/shared/catalogos/${obraId}/ordenesCambio/${ocId}`);
+}
+
+// === Órdenes de Cambio — Fase 2: ciclo de vida y aplicación al catálogo ===
+// Estados: borrador → aprobada → aplicada. (rechazada / vuelta a borrador se
+// manejan con esta misma función.) Solo cambia `estado` + metadatos; NO toca el
+// catálogo. La mutación real del catálogo la hace aplicarOrdenCambio.
+export async function setOrdenCambioEstado(obraId, ocId, estado, extra = {}) {
+  return rupdate(`/shared/catalogos/${obraId}/ordenesCambio/${ocId}`, {
+    estado, ...extra, updatedAt: Date.now()
+  });
+}
+
+// Aplica una OC aprobada al catálogo VIGENTE (/shared/catalogos/{obraId}/conceptos),
+// que es la fuente de verdad que leen las apps hermanas. El CÁLCULO de qué cambia
+// (conceptos nuevos, patches de cantidad/archivado, nuevo monto de contrato) lo
+// arma la vista, que ya tiene la cascada OPUS y el ejecutado por concepto; aquí
+// solo se persiste de forma atómica por grupo:
+//   · conceptosNuevos: { conceptoKey → conceptoCompleto }         (aditivas)
+//   · conceptosPatch:  { conceptoKey → { cantidad, total, archivado? } } (modif/quita)
+//   · ocPatch:         estado 'aplicada' + aplicadaAt/Por
+//   · metaPatch:       montoContratoCIVA recalculado
+// El baseline (contrato original) queda intacto.
+export async function aplicarOrdenCambio(obraId, ocId, { conceptosNuevos = {}, conceptosPatch = {}, ocPatch = {}, metaPatch = {} } = {}) {
+  const base = `/shared/catalogos/${obraId}`;
+  const updates = {};
+  for (const [k, c] of Object.entries(conceptosNuevos)) updates[k] = c;
+  for (const [k, patch] of Object.entries(conceptosPatch)) {
+    for (const [f, v] of Object.entries(patch)) updates[`${k}/${f}`] = v;
+  }
+  if (Object.keys(updates).length) await rupdate(`${base}/conceptos`, updates);
+  if (Object.keys(ocPatch).length) await rupdate(`${base}/ordenesCambio/${ocId}`, { ...ocPatch, updatedAt: Date.now() });
+  if (Object.keys(metaPatch).length) await updateObraMeta(obraId, metaPatch);
 }
 
 // Estado operativo de cada obra ('activo' | 'pausa' | 'terminado').

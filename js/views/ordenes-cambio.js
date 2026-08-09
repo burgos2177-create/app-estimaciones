@@ -5,11 +5,14 @@
 
 import { h, modal, toast } from '../util/dom.js';
 import { renderShell } from './shell.js';
-import { loadObra, ensureCatalogoBaseline, listOrdenesCambio, saveOrdenCambio, deleteOrdenCambio } from '../services/db.js';
+import { loadObra, ensureCatalogoBaseline, listOrdenesCambio, saveOrdenCambio, deleteOrdenCambio,
+         setOrdenCambioEstado, aplicarOrdenCambio, setAvanceObra } from '../services/db.js';
 import { money, num, dateMx } from '../util/format.js';
 import { navigate } from '../state/router.js';
-import { computeEjecutadoPorConcepto, exportOrdenCambioPdf } from '../services/export.js';
+import { computeEjecutadoPorConcepto, computeAvanceObra, exportOrdenCambioPdf } from '../services/export.js';
 import { computeContrato } from '../services/contrato.js';
+import { computeConceptoKey } from '../services/catalogo-keys.js';
+import { state } from '../state/store.js';
 
 const TIPO_LABEL = { aditiva: 'Aditiva', deductiva: 'Deductiva', mixta: 'Mixta' };
 const ESTADO_TAG = {
@@ -75,6 +78,8 @@ export async function renderOrdenesCambio({ params }) {
   const ocs = await listOrdenesCambio(obraId);
   // Ejecutado acumulado por concepto (tope de deductivas: no bajar de lo ejecutado).
   const ejecutadoPorConcepto = computeEjecutadoPorConcepto(obra);
+  // Aprobar/aplicar/rechazar tocan el contrato vigente → solo admin.
+  const isAdmin = state.user?.role === 'admin';
 
   // Cascada OPUS de la obra (para descomponer el P.U. en rubros que lee bitácora).
   const integ = obra.integracion || null;
@@ -138,11 +143,17 @@ export async function renderOrdenesCambio({ params }) {
         kvBig('Contrato vigente', money(contratoVigente), 'accent')
       ]),
       h('p', { class: 'muted', style: { fontSize: '11px', marginTop: '8px' } },
-        'El baseline (contrato original) quedó congelado. Las OC en borrador NO cambian el contrato vigente ni afectan a las apps hermanas; solo cotizan el impacto. Aplicar una OC será el siguiente paso.')
+        'El baseline (contrato original) quedó congelado. Las OC en borrador/aprobada NO cambian el contrato vigente ni afectan a las apps hermanas; solo cotizan el impacto. Al APLICAR una OC aprobada, sus cambios entran al catálogo vigente y se reflejan en las apps hermanas.'),
+      !isAdmin && h('p', { class: 'muted', style: { fontSize: '11px' } }, 'Solo un administrador puede aprobar y aplicar órdenes de cambio.')
     ]);
 
     const filas = ocsArr.map(oc => {
-      const t = ocTotales(oc, conceptosMap);
+      // Para OC no-borrador usa los montos congelados al momento de guardar: el
+      // catálogo vigente ya pudo cambiar (p.ej. tras aplicarla) y recalcular en
+      // vivo reportaría un impacto equivocado.
+      const t = (oc.estado && oc.estado !== 'borrador' && oc.montoNeto != null)
+        ? { aditivo: oc.montoAditivo || 0, deductivo: oc.montoDeductivo || 0, neto: oc.montoNeto || 0, tipo: oc.tipo || 'mixta' }
+        : ocTotales(oc, conceptosMap);
       const [cls, lbl] = ESTADO_TAG[oc.estado] || ['muted', oc.estado || '—'];
       const editable = oc.estado === 'borrador';
       return h('tr', {}, [
@@ -157,7 +168,8 @@ export async function renderOrdenesCambio({ params }) {
         h('td', { style: { whiteSpace: 'nowrap' } }, [
           h('button', { class: 'btn sm ghost', onClick: () => abrirEditor(oc) }, editable ? '✎ Editar' : '👁 Ver'),
           h('button', { class: 'btn sm ghost', style: { marginLeft: '6px' }, title: 'PDF para el cliente', onClick: () => { try { exportOrdenCambioPdf(obra, oc); } catch (e) { toast('Error: ' + e.message, 'danger'); } } }, '⤓ PDF'),
-          editable && h('button', { class: 'btn sm danger ghost', style: { marginLeft: '6px' }, onClick: () => borrarOC(oc) }, '🗑')
+          ...stateBtns(oc),
+          (editable || oc.estado === 'rechazada') && h('button', { class: 'btn sm danger ghost', style: { marginLeft: '6px' }, onClick: () => borrarOC(oc) }, '🗑')
         ])
       ]);
     });
@@ -194,6 +206,124 @@ export async function renderOrdenesCambio({ params }) {
     if (!ok) return;
     try { await deleteOrdenCambio(obraId, oc.id); delete ocs[oc.id]; toast('OC borrada', 'ok'); drawLista(); }
     catch (err) { toast('Error: ' + err.message, 'danger'); }
+  }
+
+  // ===================== CICLO DE VIDA (Fase 2) =====================
+  // borrador → aprobada → aplicada. rechazada / vuelta a borrador para ajustar.
+  async function aprobarOC(oc) {
+    const ok = await modal({
+      title: `Aprobar OC #${oc.numero}`, confirmLabel: 'Aprobar',
+      body: h('div', {}, [
+        h('p', {}, 'Marca esta orden como APROBADA por el cliente. Queda bloqueada para edición.'),
+        h('p', { class: 'muted', style: { fontSize: '12px' } }, 'Aún NO modifica el catálogo. El siguiente paso, "Aplicar al catálogo", sí surte efecto en las apps hermanas.')
+      ])
+    });
+    if (!ok) return;
+    try {
+      await setOrdenCambioEstado(obraId, oc.id, 'aprobada', { aprobadaAt: Date.now(), aprobadaPor: state.user?.uid || null });
+      toast('OC aprobada', 'ok'); renderOrdenesCambio({ params });
+    } catch (err) { toast('Error: ' + err.message, 'danger'); }
+  }
+
+  async function rechazarOC(oc) {
+    const ok = await modal({ title: `Rechazar OC #${oc.numero}`, danger: true, confirmLabel: 'Rechazar', body: h('div', {}, 'El cliente no aprobó esta orden. Podrás volverla a borrador para ajustarla o borrarla.') });
+    if (!ok) return;
+    try { await setOrdenCambioEstado(obraId, oc.id, 'rechazada', { rechazadaAt: Date.now() }); toast('OC rechazada', 'ok'); renderOrdenesCambio({ params }); }
+    catch (err) { toast('Error: ' + err.message, 'danger'); }
+  }
+
+  async function volverBorrador(oc) {
+    try { await setOrdenCambioEstado(obraId, oc.id, 'borrador', { aprobadaAt: null, aprobadaPor: null, rechazadaAt: null }); toast('OC de vuelta a borrador', 'ok'); renderOrdenesCambio({ params }); }
+    catch (err) { toast('Error: ' + err.message, 'danger'); }
+  }
+
+  // Arma la mutación del catálogo para una OC (conceptos nuevos + patches),
+  // revalidando el ejecutado (no se puede dejar por debajo de lo ya ejecutado).
+  function buildAplicacion(oc) {
+    const conceptosNuevos = {}, conceptosPatch = {}, errores = [];
+    const cambios = { agregados: 0, modificados: 0, quitados: 0, archivados: 0 };
+    let ordenMax = 0;
+    for (const c of Object.values(conceptosMap)) ordenMax = Math.max(ordenMax, Number(c.orden) || 0);
+    let addN = 0;
+    (oc.items || []).forEach((it, idx) => {
+      if (it.accion === 'agregar') {
+        const cd = Number(it.costoDirectoUnit) || 0;
+        const pu = Number(it.pu) || rubrosDeCD(cd).venta;
+        const cant = Number(it.cantidad) || 0;
+        const concepto = {
+          tipo: 'precio_unitario', clave: it.clave || '', descripcion: it.descripcion || '',
+          unidad: it.unidad || '', cantidad: cant, precio_unitario: pu, total: cant * pu,
+          nivel: 0, path: [], agrupadores: [], orden: ordenMax + 1 + addN,
+          plantillaTipo: null, plantillaConfig: null, archivado: false,
+          ocOrigen: oc.id, ocNumero: oc.numero || null, costoDirectoUnit: cd
+        };
+        let key = computeConceptoKey(concepto);
+        while (conceptosMap[key] || conceptosNuevos[key]) key = `${key}_oc${oc.numero}_${idx}`;
+        conceptosNuevos[key] = concepto;
+        addN++; cambios.agregados++;
+      } else {
+        const c = conceptosMap[it.conceptoId];
+        if (!c) { errores.push('Un concepto referenciado ya no existe en el catálogo.'); return; }
+        const pu = Number(c.precio_unitario) || 0;
+        const ejec = Number(ejecutadoPorConcepto[it.conceptoId]) || 0;
+        const actual = Number(c.cantidad) || 0;
+        let nueva;
+        if (it.accion === 'quitar') {
+          const quita = (it.cantidad != null && it.cantidad !== '') ? Number(it.cantidad) : actual;
+          nueva = actual - quita;
+        } else { nueva = Number(it.despues) || 0; }
+        if (nueva < ejec - 1e-6) { errores.push(`${c.clave || c.descripcion}: quedaría en ${num(nueva, 2)}, por debajo de lo ejecutado (${num(ejec, 2)}).`); return; }
+        if (nueva <= 1e-6) { conceptosPatch[it.conceptoId] = { cantidad: 0, total: 0, archivado: true }; cambios.quitados++; cambios.archivados++; }
+        else { conceptosPatch[it.conceptoId] = { cantidad: nueva, total: nueva * pu }; if (it.accion === 'quitar') cambios.quitados++; else cambios.modificados++; }
+      }
+    });
+    return { conceptosNuevos, conceptosPatch, errores, cambios };
+  }
+
+  async function aplicarOC(oc) {
+    const { conceptosNuevos, conceptosPatch, errores, cambios } = buildAplicacion(oc);
+    if (errores.length) { toast(errores[0], 'danger'); return; }
+    const t = ocTotales(oc, conceptosMap);
+    const ivaPct = Number(m.ivaPct ?? 0.16);
+    const nuevoContrato = (contratoVigente + t.neto) * (1 + ivaPct);
+    const ok = await modal({
+      title: `Aplicar OC #${oc.numero} al catálogo`, confirmLabel: 'Aplicar al catálogo',
+      body: h('div', {}, [
+        h('p', {}, 'Esto modifica el CATÁLOGO VIGENTE que leen todas las apps hermanas (bitácora, compras, materiales). El contrato original queda congelado como baseline.'),
+        h('ul', { style: { fontSize: '13px', lineHeight: 1.7 } }, [
+          cambios.agregados ? h('li', {}, `${cambios.agregados} concepto(s) nuevo(s)`) : null,
+          cambios.modificados ? h('li', {}, `${cambios.modificados} concepto(s) con cantidad modificada`) : null,
+          cambios.quitados ? h('li', {}, `${cambios.quitados} concepto(s) reducido(s)${cambios.archivados ? ` — ${cambios.archivados} archivado(s)` : ''}`) : null
+        ]),
+        h('div', { class: 'row', style: { marginTop: '8px', gap: '18px', flexWrap: 'wrap' } }, [
+          h('div', {}, [h('div', { class: 'muted', style: { fontSize: '11px' } }, 'Contrato vigente actual'), h('b', { class: 'mono' }, money(contratoVigente * (1 + ivaPct)))]),
+          h('div', {}, [h('div', { class: 'muted', style: { fontSize: '11px' } }, 'Contrato con OC aplicada'), h('b', { class: 'mono', style: { color: 'var(--accent)' } }, money(nuevoContrato))])
+        ]),
+        h('p', { class: 'muted', style: { fontSize: '11px', marginTop: '10px' } }, 'Para deshacerlo habría que capturar una OC inversa.')
+      ])
+    });
+    if (!ok) return;
+    try {
+      await aplicarOrdenCambio(obraId, oc.id, {
+        conceptosNuevos, conceptosPatch,
+        ocPatch: { estado: 'aplicada', aplicadaAt: Date.now(), aplicadaPor: state.user?.uid || null, contratoAntes: contratoVigente * (1 + ivaPct), contratoDespues: nuevoContrato },
+        metaPatch: { montoContratoCIVA: nuevoContrato }
+      });
+      // Re-publica el avance para bitácora (cambió el denominador del contrato).
+      try { const fresh = await loadObra(obraId); const av = computeAvanceObra(fresh); if (av) await setAvanceObra(obraId, av); } catch {}
+      toast('OC aplicada al catálogo vigente', 'ok');
+      renderOrdenesCambio({ params });
+    } catch (err) { toast('Error al aplicar: ' + err.message, 'danger'); }
+  }
+
+  // Botones de transición de estado para una OC (solo admin).
+  function stateBtns(oc) {
+    if (!isAdmin) return [];
+    const mk = (cls, txt, title, fn) => h('button', { class: 'btn sm ' + cls, style: { marginLeft: '6px' }, title, onClick: () => fn(oc) }, txt);
+    if (oc.estado === 'borrador') return [mk('ok', '✓ Aprobar', 'Marcar como aprobada por el cliente', aprobarOC), mk('warn ghost', '✕ Rechazar', 'El cliente no la aprobó', rechazarOC)];
+    if (oc.estado === 'aprobada') return [mk('primary', '✅ Aplicar', 'Aplicar al catálogo vigente', aplicarOC), mk('ghost', '↩ Borrador', 'Volver a borrador para ajustar', volverBorrador), mk('warn ghost', '✕ Rechazar', 'El cliente no la aprobó', rechazarOC)];
+    if (oc.estado === 'rechazada') return [mk('ghost', '↩ Reabrir', 'Volver a borrador', volverBorrador)];
+    return [];   // aplicada: sin transiciones
   }
 
   // ===================== EDITOR =====================
@@ -422,6 +552,7 @@ export async function renderOrdenesCambio({ params }) {
         h('h1', { style: { margin: 0 } }, existente ? `OC #${work.numero || ''}` : 'Nueva orden de cambio'),
         readonly && h('span', { class: 'tag ok' }, ESTADO_TAG[existente.estado]?.[1] || ''),
         h('div', { style: { flex: 1 } }),
+        readonly && existente.estado === 'aprobada' && isAdmin && h('button', { class: 'btn primary', title: 'Aplicar esta OC al catálogo vigente', onClick: () => aplicarOC(existente) }, '✅ Aplicar al catálogo'),
         h('button', { class: 'btn', title: 'Resumen ejecutivo de la OC (PDF) para presentar al cliente y firmar', onClick: generarPdf }, '⤓ PDF para el cliente'),
         h('button', { class: 'btn ghost', onClick: () => drawLista() }, '← Volver')
       ]),
