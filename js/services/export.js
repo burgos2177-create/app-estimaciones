@@ -1227,7 +1227,7 @@ function drawObraHeader(doc, m, titulo) {
 }
 
 // Apartado de firmas: dos columnas (SOGRUB y cliente) con línea, cargo y fecha.
-function drawFirmas(doc, m, y) {
+function drawFirmas(doc, m, y, docLabel = 'estimación') {
   const w = doc.internal.pageSize.width;
   const [nR, nG, nB] = BRAND.navy;
   const [cR, cG, cB] = BRAND.cyan;
@@ -1236,7 +1236,7 @@ function drawFirmas(doc, m, y) {
   doc.text('ACEPTACIÓN Y CONFORMIDAD', 30, y);
   doc.setDrawColor(cR, cG, cB); doc.setLineWidth(1.2); doc.line(30, y + 5, 178, y + 5); doc.setLineWidth(0.2);
   doc.setFont('helvetica', 'normal'); doc.setFontSize(8); doc.setTextColor(110);
-  doc.text('Las partes manifiestan su conformidad con los conceptos, cantidades e importes de la presente estimación.', 30, y + 20);
+  doc.text(`Las partes manifiestan su conformidad con los conceptos, cantidades e importes de la presente ${docLabel}.`, 30, y + 20);
 
   const gap = 50;
   const colW = (w - 60 - gap) / 2;
@@ -1281,6 +1281,116 @@ function drawFooterLite(doc, data, m) {
   doc.setFontSize(8); doc.setTextColor(150);
   doc.text(m.construye || '', 30, h - 18);
   doc.text(`Página ${data.pageNumber}`, w - 30, h - 18, { align: 'right' });
+}
+
+// ====================================================================
+//        PDF — ORDEN DE CAMBIO (resumen ejecutivo para el cliente)
+// ====================================================================
+export function exportOrdenCambioPdf(obra, oc) {
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ unit: 'pt', format: 'letter' });
+  const m = obra.meta || {};
+  const conceptosMap = obra.catalogo?.conceptos || {};
+  const ivaPct = Number(m.ivaPct ?? 0.16);
+  const W = doc.internal.pageSize.width;
+  const safe = (m.nombre || 'obra').replace(/[^\w\-]+/g, '_').slice(0, 40);
+  const signed = (v) => (v >= 0 ? '+' : '−') + money(Math.abs(v));
+
+  // Construir líneas aditivas / deductivas desde los items de la OC.
+  let sumAdit = 0, sumDeduct = 0;
+  const adit = [], deduct = [];
+  for (const it of (oc.items || [])) {
+    if (it.accion === 'agregar') {
+      const cant = Number(it.cantidad) || 0, pu = Number(it.pu) || 0;
+      adit.push([it.clave || '—', it.descripcion || '—', it.unidad || '', num2(cant), money(pu), money(cant * pu)]);
+      sumAdit += cant * pu;
+    } else {
+      const c = conceptosMap[it.conceptoId];
+      const pu = c ? Number(c.precio_unitario) || 0 : 0;
+      const clave = c?.clave || '—', u = c?.unidad || '';
+      if (it.accion === 'quitar') {
+        const cant = (it.cantidad != null && it.cantidad !== '') ? Number(it.cantidad) : (c ? Number(c.cantidad) || 0 : 0);
+        deduct.push([clave, c?.descripcion || '—', u, num2(cant), money(pu), money(cant * pu)]);
+        sumDeduct += cant * pu;
+      } else {
+        const antes = c ? Number(c.cantidad) || 0 : 0, despues = Number(it.despues) || 0, d = despues - antes;
+        const row = [clave, (c?.descripcion || '—') + `  (cant. ${num2(antes)} → ${num2(despues)})`, u, num2(Math.abs(d)), money(pu), money(Math.abs(d * pu))];
+        if (d >= 0) { adit.push(row); sumAdit += d * pu; } else { deduct.push(row); sumDeduct += -d * pu; }
+      }
+    }
+  }
+
+  drawObraHeader(doc, m, 'ORDEN DE CAMBIO');
+  let y = 168;
+  doc.setFont('helvetica', 'bold'); doc.setFontSize(11); doc.setTextColor(30);
+  doc.text(`Orden de Cambio No. ${oc.numero || ''}`, 30, y);
+  doc.setFont('helvetica', 'normal'); doc.setFontSize(9); doc.setTextColor(90);
+  const tipoLbl = { aditiva: 'Aditiva', deductiva: 'Deductiva', mixta: 'Mixta (aditiva + deductiva)' }[oc.tipo] || '—';
+  doc.text(`Fecha: ${dateStr(oc.fecha)}    ·    Tipo: ${tipoLbl}`, 30, y + 14);
+  y += 24;
+  if (oc.descripcion) {
+    doc.setTextColor(60); doc.setFontSize(9);
+    const ln = doc.splitTextToSize('Motivo del cambio: ' + oc.descripcion, W - 60);
+    doc.text(ln, 30, y + 6); y += 6 + ln.length * 11;
+  }
+  y += 12;
+
+  const head = [['Clave', 'Concepto', 'U.', 'Cantidad', 'P.U.', 'Importe']];
+  const colStyles = { 0: { cellWidth: 62 }, 2: { cellWidth: 32, halign: 'center' }, 3: { halign: 'right', cellWidth: 58 }, 4: { halign: 'right', cellWidth: 68 }, 5: { halign: 'right', cellWidth: 76 } };
+  const tblCommon = { styles: { font: 'helvetica', fontSize: 8, cellPadding: 3, lineColor: [220, 226, 234], lineWidth: 0.3 }, columnStyles: colStyles, margin: { left: 30, right: 30, bottom: 55 }, didDrawPage: (d) => drawFooter(doc, d, m) };
+
+  if (adit.length) {
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(10); doc.setTextColor(30, 140, 90);
+    doc.text('CONCEPTOS ADITIVOS  (+)', 30, y);
+    doc.autoTable({ ...tblCommon, startY: y + 6, head, body: adit,
+      headStyles: { fillColor: BRAND.cyan, textColor: 255, fontStyle: 'bold' },
+      foot: [[{ content: 'Subtotal aditivo', colSpan: 5, styles: { halign: 'right', fontStyle: 'bold' } }, { content: money(sumAdit), styles: { halign: 'right', fontStyle: 'bold' } }]],
+      footStyles: { fillColor: [235, 245, 250], textColor: 30 } });
+    y = doc.lastAutoTable.finalY + 18;
+  }
+  if (deduct.length) {
+    if (y > 640) { doc.addPage(); y = 60; }
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(10); doc.setTextColor(180, 70, 60);
+    doc.text('CONCEPTOS DEDUCTIVOS  (−)', 30, y);
+    doc.autoTable({ ...tblCommon, startY: y + 6, head, body: deduct,
+      headStyles: { fillColor: [120, 90, 90], textColor: 255, fontStyle: 'bold' },
+      foot: [[{ content: 'Subtotal deductivo', colSpan: 5, styles: { halign: 'right', fontStyle: 'bold' } }, { content: '−' + money(sumDeduct), styles: { halign: 'right', fontStyle: 'bold' } }]],
+      footStyles: { fillColor: [250, 240, 238], textColor: 30 } });
+    y = doc.lastAutoTable.finalY + 18;
+  }
+
+  // Resumen de montos
+  const netoSub = sumAdit - sumDeduct;
+  const ivaNeto = netoSub * ivaPct;
+  const netoCIVA = netoSub + ivaNeto;
+  const contratoAntes = Number(m.montoContratoCIVA) || 0;
+  const contratoDespues = contratoAntes + netoCIVA;
+  if (y > 540) { doc.addPage(); y = 60; }
+  doc.autoTable({
+    startY: y,
+    body: [
+      ['Subtotal aditivo', money(sumAdit)],
+      ['Subtotal deductivo', '−' + money(sumDeduct)],
+      [{ content: 'Neto de la orden de cambio (sin IVA)', styles: { fontStyle: 'bold' } }, { content: signed(netoSub), styles: { fontStyle: 'bold' } }],
+      [`IVA (${(ivaPct * 100).toFixed(0)}%)`, signed(ivaNeto)],
+      [{ content: 'Neto con IVA', styles: { fontStyle: 'bold' } }, { content: signed(netoCIVA), styles: { fontStyle: 'bold' } }],
+      ['Contrato vigente antes de esta OC (c/IVA)', money(contratoAntes)],
+      [{ content: 'Contrato con esta orden de cambio (c/IVA)', styles: { fontStyle: 'bold' } }, { content: money(contratoDespues), styles: { fontStyle: 'bold', textColor: BRAND.navy } }]
+    ],
+    theme: 'plain', styles: { font: 'helvetica', fontSize: 9.5, cellPadding: 4 },
+    columnStyles: { 0: { textColor: 60 }, 1: { halign: 'right' } },
+    margin: { left: W / 2 - 30, right: 30 }
+  });
+  y = doc.lastAutoTable.finalY + 18;
+
+  doc.setFontSize(8); doc.setTextColor(110);
+  const nota = doc.splitTextToSize('Este documento presenta el cambio de alcance solicitado para su revisión y aprobación. Surtirá efecto en el catálogo contratado y en los montos aquí indicados una vez firmado de conformidad por ambas partes.', W - 60);
+  doc.text(nota, 30, y); y += nota.length * 10 + 16;
+
+  if (y > 600) { doc.addPage(); y = 80; }
+  drawFirmas(doc, m, y, 'orden de cambio');
+
+  doc.save(`OC-${oc.numero || ''}_${safe}.pdf`);
 }
 
 // ====================================================================

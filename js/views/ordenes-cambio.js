@@ -8,7 +8,7 @@ import { renderShell } from './shell.js';
 import { loadObra, ensureCatalogoBaseline, listOrdenesCambio, saveOrdenCambio, deleteOrdenCambio } from '../services/db.js';
 import { money, num, dateMx } from '../util/format.js';
 import { navigate } from '../state/router.js';
-import { computeEjecutadoPorConcepto } from '../services/export.js';
+import { computeEjecutadoPorConcepto, exportOrdenCambioPdf } from '../services/export.js';
 import { computeContrato } from '../services/contrato.js';
 
 const TIPO_LABEL = { aditiva: 'Aditiva', deductiva: 'Deductiva', mixta: 'Mixta' };
@@ -156,6 +156,7 @@ export async function renderOrdenesCambio({ params }) {
         h('td', {}, h('span', { class: 'tag ' + cls }, lbl)),
         h('td', { style: { whiteSpace: 'nowrap' } }, [
           h('button', { class: 'btn sm ghost', onClick: () => abrirEditor(oc) }, editable ? '✎ Editar' : '👁 Ver'),
+          h('button', { class: 'btn sm ghost', style: { marginLeft: '6px' }, title: 'PDF para el cliente', onClick: () => { try { exportOrdenCambioPdf(obra, oc); } catch (e) { toast('Error: ' + e.message, 'danger'); } } }, '⤓ PDF'),
           editable && h('button', { class: 'btn sm danger ghost', style: { marginLeft: '6px' }, onClick: () => borrarOC(oc) }, '🗑')
         ])
       ]);
@@ -421,6 +422,7 @@ export async function renderOrdenesCambio({ params }) {
         h('h1', { style: { margin: 0 } }, existente ? `OC #${work.numero || ''}` : 'Nueva orden de cambio'),
         readonly && h('span', { class: 'tag ok' }, ESTADO_TAG[existente.estado]?.[1] || ''),
         h('div', { style: { flex: 1 } }),
+        h('button', { class: 'btn', title: 'Resumen ejecutivo de la OC (PDF) para presentar al cliente y firmar', onClick: generarPdf }, '⤓ PDF para el cliente'),
         h('button', { class: 'btn ghost', onClick: () => drawLista() }, '← Volver')
       ]),
       h('div', { class: 'card' }, [
@@ -458,6 +460,14 @@ export async function renderOrdenesCambio({ params }) {
 
     renderShell(crumbs(obraId, m.nombre), editor);
     renderItems();
+
+    function generarPdf() {
+      if (!work.items.length) { toast('Agrega al menos una partida al cambio', 'warn'); return; }
+      const t = ocTotales(work, conceptosMap);
+      try {
+        exportOrdenCambioPdf(obra, { numero: work.numero, descripcion: work.descripcion, fecha: work.fecha, tipo: t.tipo, items: work.items, montoAditivo: t.aditivo, montoDeductivo: t.deductivo, montoNeto: t.neto });
+      } catch (err) { toast('Error al generar PDF: ' + err.message, 'danger'); }
+    }
 
     async function guardar() {
       const t = ocTotales(work, conceptosMap);
