@@ -9,6 +9,7 @@ import { loadObra, ensureCatalogoBaseline, listOrdenesCambio, saveOrdenCambio, d
 import { money, num, dateMx } from '../util/format.js';
 import { navigate } from '../state/router.js';
 import { computeEjecutadoPorConcepto } from '../services/export.js';
+import { computeContrato } from '../services/contrato.js';
 
 const TIPO_LABEL = { aditiva: 'Aditiva', deductiva: 'Deductiva', mixta: 'Mixta' };
 const ESTADO_TAG = {
@@ -74,6 +75,45 @@ export async function renderOrdenesCambio({ params }) {
   const ocs = await listOrdenesCambio(obraId);
   // Ejecutado acumulado por concepto (tope de deductivas: no bajar de lo ejecutado).
   const ejecutadoPorConcepto = computeEjecutadoPorConcepto(obra);
+
+  // Cascada OPUS de la obra (para descomponer el P.U. en rubros que lee bitácora).
+  const integ = obra.integracion || null;
+  const casc = integ ? {
+    pct_ind_oficina: integ.pct_ind_oficina, pct_ind_campo: integ.pct_ind_campo,
+    pct_financiamiento: integ.pct_financiamiento, pct_utilidad: integ.pct_utilidad,
+    pct_cargos_adicionales: integ.pct_cargos_adicionales, pct_otro: integ.pct_otro,
+    iva_pct: integ.iva_pct
+  } : null;
+  // Venta (sin IVA) por cada $1 de costo directo, para back-out de conceptos existentes.
+  const ventaPorCD = casc ? computeContrato({ ...casc, costo_directo: 1 }).subtotal_venta : 1;
+  const rubrosZero = { costoDirecto: 0, indOficina: 0, indCampo: 0, financiamiento: 0, utilidad: 0, cargos: 0, otro: 0, venta: 0 };
+  function rubrosDeCD(cd) {
+    if (!casc) return { ...rubrosZero, costoDirecto: cd, venta: cd };
+    const c = computeContrato({ ...casc, costo_directo: cd });
+    return { costoDirecto: c.costo_directo, indOficina: c.ind_oficina, indCampo: c.ind_campo, financiamiento: c.financiamiento, utilidad: c.utilidad, cargos: c.cargos_adicionales, otro: c.otro, venta: c.subtotal_venta };
+  }
+  function rubrosDeVenta(venta) { return rubrosDeCD(ventaPorCD ? venta / ventaPorCD : 0); }
+  function sumRubros(a, b, signB) { const o = {}; for (const k in rubrosZero) o[k] = (a[k] || 0) + signB * (b[k] || 0); return o; }
+  // Impacto por rubro de una partida (signo: aditivo +, deductivo −).
+  function itemRubros(item) {
+    if (item.accion === 'agregar') {
+      const cd = (Number(item.costoDirectoUnit) || 0) * (Number(item.cantidad) || 0);
+      return { ...rubrosDeCD(cd) };
+    }
+    const c = conceptosMap[item.conceptoId];
+    const pu = c ? Number(c.precio_unitario) || 0 : 0;
+    if (item.accion === 'quitar') {
+      const cant = (item.cantidad != null && item.cantidad !== '') ? Number(item.cantidad) : (c ? Number(c.cantidad) || 0 : 0);
+      const r = rubrosDeVenta(cant * pu); const o = {}; for (const k in rubrosZero) o[k] = -(r[k] || 0); return o;
+    }
+    if (item.accion === 'modificar') {
+      const antes = c ? Number(c.cantidad) || 0 : 0;
+      const deltaVenta = ((Number(item.despues) || 0) - antes) * pu;
+      const r = rubrosDeVenta(Math.abs(deltaVenta)), s = deltaVenta >= 0 ? 1 : -1; const o = {}; for (const k in rubrosZero) o[k] = s * (r[k] || 0); return o;
+    }
+    return { ...rubrosZero };
+  }
+  function ocRubros(oc) { let acc = { ...rubrosZero }; for (const it of (oc.items || [])) acc = sumRubros(acc, itemRubros(it), 1); return acc; }
 
   const contratoOriginal = sumaPU(baseline?.conceptos || conceptosMap);
   const contratoVigente = sumaPU(conceptosMap);
@@ -177,7 +217,9 @@ export async function renderOrdenesCambio({ params }) {
     const sumDeduct = h('span', { class: 'mono warn' }, money(0));
     const sumNeto = h('span', { class: 'mono', style: { fontWeight: 700 } }, money(0));
     const vigenteProy = h('span', { class: 'mono', style: { fontWeight: 700, color: 'var(--accent)' } }, money(contratoVigente));
+    const rubrosNode = h('div', { style: { fontSize: '12px', marginTop: '10px', paddingTop: '10px', borderTop: '1px solid var(--border)' } });
 
+    function fmtDelta(v) { return (v >= 0 ? '+' : '−') + money(Math.abs(v)); }
     function recompute() {
       const t = ocTotales(work, conceptosMap);
       sumAdit.textContent = '+' + money(t.aditivo);
@@ -185,6 +227,17 @@ export async function renderOrdenesCambio({ params }) {
       sumNeto.textContent = (t.neto >= 0 ? '+' : '−') + money(Math.abs(t.neto));
       sumNeto.style.color = t.neto >= 0 ? 'var(--ok)' : 'var(--warn)';
       vigenteProy.textContent = money(contratoVigente + t.neto);
+      // Impacto por rubro (lo que leerá bitácora para ajustar su presupuesto)
+      const r = ocRubros(work);
+      rubrosNode.innerHTML = '';
+      rubrosNode.appendChild(h('div', { class: 'muted', style: { marginBottom: '4px' } }, 'Impacto por rubro (para bitácora):'));
+      rubrosNode.appendChild(h('div', { class: 'row', style: { flexWrap: 'wrap', gap: '14px' } }, [
+        h('span', {}, ['Costo directo: ', h('b', { class: 'mono' }, fmtDelta(r.costoDirecto))]),
+        h('span', {}, ['Indirectos: ', h('b', { class: 'mono' }, fmtDelta(r.indOficina + r.indCampo))]),
+        r.financiamiento ? h('span', {}, ['Financiamiento: ', h('b', { class: 'mono' }, fmtDelta(r.financiamiento))]) : null,
+        h('span', {}, ['Utilidad: ', h('b', { class: 'mono' }, fmtDelta(r.utilidad))]),
+        h('span', {}, ['Venta: ', h('b', { class: 'mono', style: { color: 'var(--accent)' } }, fmtDelta(r.venta))])
+      ]));
     }
 
     function renderItems() {
@@ -246,7 +299,23 @@ export async function renderOrdenesCambio({ params }) {
       const desc = h('input', { placeholder: 'Descripción del concepto nuevo', value: cur?.descripcion || '' });
       const unidad = h('input', { placeholder: 'Unidad (m2, m3, pza…)', style: { width: '120px' }, value: cur?.unidad || '' });
       const cantidad = h('input', { type: 'number', step: 'any', placeholder: '0', value: cur?.cantidad ?? '' });
-      const pu = h('input', { type: 'number', step: '0.01', placeholder: '0.00', value: cur?.pu ?? '' });
+      // Se captura COSTO DIRECTO unitario (como en OPUS); la venta (P.U.) y el
+      // desglose por rubro se derivan con la cascada del contrato.
+      const cdIn = h('input', { type: 'number', step: '0.01', placeholder: '0.00', value: cur?.costoDirectoUnit ?? '' });
+      const desglose = h('div', { style: { fontSize: '12px', marginTop: '4px', lineHeight: 1.6 } });
+      function refreshDesglose() {
+        const cd = Number(cdIn.value) || 0;
+        if (!casc) { desglose.innerHTML = ''; desglose.appendChild(h('span', { class: 'warn' }, 'Sin integración OPUS en la obra: se usará el costo directo como venta (sin desglose de rubros).')); return; }
+        const r = rubrosDeCD(cd);
+        desglose.innerHTML = '';
+        desglose.appendChild(h('div', { class: 'muted' }, [
+          `Indirectos ${money(r.indOficina + r.indCampo)} · `,
+          r.financiamiento ? `Financ. ${money(r.financiamiento)} · ` : '',
+          `Utilidad ${money(r.utilidad)}`
+        ]));
+        desglose.appendChild(h('div', {}, ['P.U. de venta (derivado): ', h('b', { style: { color: 'var(--accent)' } }, money(r.venta))]));
+      }
+      cdIn.addEventListener('input', refreshDesglose); refreshDesglose();
       const ok = await modal({
         title: cur ? 'Editar concepto agregado' : 'Agregar concepto (aditiva)',
         body: h('div', {}, [
@@ -257,8 +326,9 @@ export async function renderOrdenesCambio({ params }) {
           ]),
           h('div', { class: 'grid-2', style: { marginTop: '10px' } }, [
             h('div', { class: 'field' }, [h('label', {}, 'Cantidad'), cantidad]),
-            h('div', { class: 'field' }, [h('label', {}, 'P.U.'), pu])
-          ])
+            h('div', { class: 'field' }, [h('label', {}, 'Costo directo unitario'), cdIn])
+          ]),
+          desglose
         ]),
         confirmLabel: cur ? 'Guardar' : 'Agregar', onConfirm: () => {
           if (!desc.value.trim()) { toast('La descripción es requerida', 'warn'); return false; }
@@ -266,7 +336,8 @@ export async function renderOrdenesCambio({ params }) {
         }
       });
       if (!ok) return;
-      const item = { accion: 'agregar', clave: clave.value.trim(), descripcion: desc.value.trim(), unidad: unidad.value.trim(), cantidad: Number(cantidad.value) || 0, pu: Number(pu.value) || 0 };
+      const cdUnit = Number(cdIn.value) || 0;
+      const item = { accion: 'agregar', clave: clave.value.trim(), descripcion: desc.value.trim(), unidad: unidad.value.trim(), cantidad: Number(cantidad.value) || 0, costoDirectoUnit: cdUnit, pu: rubrosDeCD(cdUnit).venta };
       if (editIdx != null) work.items[editIdx] = item; else work.items.push(item);
       renderItems();
     }
@@ -362,7 +433,7 @@ export async function renderOrdenesCambio({ params }) {
         h('div', { class: 'row', style: { marginBottom: '8px' } }, [
           h('h3', { style: { margin: 0 } }, 'Partidas del cambio'),
           h('div', { style: { flex: 1 } }),
-          !readonly && h('button', { class: 'btn sm ok', onClick: addAgregar }, '＋ Agregar concepto'),
+          !readonly && h('button', { class: 'btn sm ok', onClick: () => addAgregar() }, '＋ Agregar concepto'),
           !readonly && h('button', { class: 'btn sm', onClick: () => addSobreConcepto('modificar') }, '✎ Modificar cantidad'),
           !readonly && h('button', { class: 'btn sm warn', onClick: () => addSobreConcepto('quitar') }, '－ Quitar cantidad')
         ]),
@@ -376,7 +447,8 @@ export async function renderOrdenesCambio({ params }) {
           kvBig('Aditivo', sumAdit, ''), kvBig('Deductivo', sumDeduct, ''),
           kvBig('Neto', sumNeto, ''), kvBig('Contrato vigente proyectado', vigenteProy, '')
         ]),
-        h('p', { class: 'muted', style: { fontSize: '11px', marginTop: '8px' } }, 'Cotización: así quedaría el contrato SI se aplica esta OC. En borrador no se toca nada.')
+        rubrosNode,
+        h('p', { class: 'muted', style: { fontSize: '11px', marginTop: '8px' } }, 'Cotización: así quedaría el contrato SI se aplica esta OC. En borrador no se toca nada. El desglose por rubro es lo que bitácora usará para ajustar su presupuesto al aplicar.')
       ]),
       !readonly && h('div', { class: 'row', style: { justifyContent: 'flex-end' } }, [
         h('button', { class: 'btn ghost', onClick: () => drawLista() }, 'Cancelar'),
@@ -389,13 +461,18 @@ export async function renderOrdenesCambio({ params }) {
 
     async function guardar() {
       const t = ocTotales(work, conceptosMap);
+      const r = ocRubros(work);
+      const r2 = {};
+      for (const k in r) r2[k] = Math.round((r[k] || 0) * 100) / 100;
       const payload = {
         id: work.id, descripcion: work.descripcion || '', fecha: work.fecha,
         estado: 'borrador', tipo: t.tipo,
         items: work.items,
         montoAditivo: Math.round(t.aditivo * 100) / 100,
         montoDeductivo: Math.round(t.deductivo * 100) / 100,
-        montoNeto: Math.round(t.neto * 100) / 100
+        montoNeto: Math.round(t.neto * 100) / 100,
+        // Desglose por rubro (con signo) para que bitácora ajuste su presupuesto al aplicar.
+        impactoRubros: r2
       };
       try {
         const id = await saveOrdenCambio(obraId, payload);
