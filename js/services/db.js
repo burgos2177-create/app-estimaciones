@@ -599,26 +599,73 @@ export async function setOrdenCambioEstado(obraId, ocId, estado, extra = {}) {
   });
 }
 
-// Aplica una OC aprobada al catálogo VIGENTE (/shared/catalogos/{obraId}/conceptos),
-// que es la fuente de verdad que leen las apps hermanas. El CÁLCULO de qué cambia
-// (conceptos nuevos, patches de cantidad/archivado, nuevo monto de contrato) lo
-// arma la vista, que ya tiene la cascada OPUS y el ejecutado por concepto; aquí
-// solo se persiste de forma atómica por grupo:
-//   · conceptosNuevos: { conceptoKey → conceptoCompleto }         (aditivas)
-//   · conceptosPatch:  { conceptoKey → { cantidad, total, archivado? } } (modif/quita)
-//   · ocPatch:         estado 'aplicada' + aplicadaAt/Por
-//   · metaPatch:       montoContratoCIVA recalculado
-// El baseline (contrato original) queda intacto.
-export async function aplicarOrdenCambio(obraId, ocId, { conceptosNuevos = {}, conceptosPatch = {}, ocPatch = {}, metaPatch = {} } = {}) {
-  const base = `/shared/catalogos/${obraId}`;
-  const updates = {};
-  for (const [k, c] of Object.entries(conceptosNuevos)) updates[k] = c;
-  for (const [k, patch] of Object.entries(conceptosPatch)) {
-    for (const [f, v] of Object.entries(patch)) updates[`${k}/${f}`] = v;
+// Contrato vigente consolidado por obra: /shared/contratos/{obraId}.
+// Es el nodo que leen las apps hermanas (bitácora, compras, materiales) para
+// saber cuál es el contrato en pie, cuánto se movió por órdenes de cambio y
+// cómo se reparte ese movimiento por rubro. Estimaciones es el ÚNICO escritor.
+export async function getContratoVigente(obraId) {
+  return await rread(`/shared/contratos/${obraId}`);
+}
+export async function publicarContratoVigente(obraId, payload) {
+  return rset(`/shared/contratos/${obraId}`, { ...payload, updatedAt: Date.now(), origenApp: 'estimaciones' });
+}
+
+// Aplica una OC aprobada. Es LA operación que hace que el cambio de alcance
+// surta efecto en todas las apps de la suite, y se escribe en UNA sola
+// actualización multi-path (atómica en RTDB): o entra todo, o no entra nada.
+//
+// Qué toca:
+//   · /shared/catalogos/{obraId}/conceptos   → catálogo VIGENTE (fuente de verdad)
+//   · obras/{obraId}/integracion + meta      → contrato recalculado por la cascada
+//   · /shared/catalogos/{obraId}/ordenesCambio/{ocId} → estado 'aplicada' + bitácora
+//   · /shared/contratos/{obraId}             → contrato consolidado para las hermanas
+//
+// El CÁLCULO lo arma la vista (tiene la cascada OPUS y el ejecutado por concepto).
+// El baseline (contrato original) queda intacto: es el ancla para auditar.
+export async function aplicarOrdenCambio(obraId, ocId, {
+  conceptosNuevos = {}, conceptosPatch = {}, ocPatch = {},
+  metaPatch = {}, integracionInput = null, contrato = null
+} = {}) {
+  // Guarda de idempotencia: la OC debe seguir APROBADA. Evita doble aplicación
+  // desde una pestaña vieja (aplicar dos veces duplicaría el cambio de contrato).
+  const estadoActual = await rread(`/shared/catalogos/${obraId}/ordenesCambio/${ocId}/estado`);
+  if (estadoActual !== 'aprobada') {
+    throw new Error(`La orden de cambio ya no está aprobada (estado actual: ${estadoActual || 'desconocido'}). Recarga la página.`);
   }
-  if (Object.keys(updates).length) await rupdate(`${base}/conceptos`, updates);
-  if (Object.keys(ocPatch).length) await rupdate(`${base}/ordenesCambio/${ocId}`, { ...ocPatch, updatedAt: Date.now() });
-  if (Object.keys(metaPatch).length) await updateObraMeta(obraId, metaPatch);
+
+  const now = Date.now();
+  const cat = `shared/catalogos/${obraId}`;
+  const obraBase = appPath(`obras/${obraId}`);
+  const updates = {};
+
+  // 1) Catálogo vigente: conceptos nuevos completos + patches de los existentes.
+  for (const [k, c] of Object.entries(conceptosNuevos)) updates[`${cat}/conceptos/${k}`] = c;
+  for (const [k, patch] of Object.entries(conceptosPatch)) {
+    for (const [f, v] of Object.entries(patch)) updates[`${cat}/conceptos/${k}/${f}`] = v;
+  }
+
+  // 2) Contrato de la obra. Si hay integración OPUS, el contrato se DERIVA de la
+  //    cascada con el nuevo costo directo (así integracion y meta nunca divergen,
+  //    y el % de avance no se calcula contra un contrato viejo).
+  if (integracionInput) {
+    const c = computeContrato(integracionInput);
+    updates[`${obraBase}/integracion`] = buildIntegracionBlock(integracionInput, c);
+    updates[`${obraBase}/meta/montoContratoCIVA`] = c.monto_con_iva;
+    updates[`${obraBase}/meta/ivaPct`] = c.iva_pct;
+    updates[`${obraBase}/meta/updatedAt`] = now;
+  } else {
+    for (const [f, v] of Object.entries(metaPatch)) updates[`${obraBase}/meta/${f}`] = v;
+    if (Object.keys(metaPatch).length) updates[`${obraBase}/meta/updatedAt`] = now;
+  }
+
+  // 3) Sello de la OC (queda el antes/después para auditar y para revertir).
+  for (const [f, v] of Object.entries(ocPatch)) updates[`${cat}/ordenesCambio/${ocId}/${f}`] = v;
+  updates[`${cat}/ordenesCambio/${ocId}/updatedAt`] = now;
+
+  // 4) Contrato consolidado que leen las apps hermanas.
+  if (contrato) updates[`shared/contratos/${obraId}`] = { ...contrato, updatedAt: now, origenApp: 'estimaciones' };
+
+  await rupdate('/', updates);
 }
 
 // Estado operativo de cada obra ('activo' | 'pausa' | 'terminado').

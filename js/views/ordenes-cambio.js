@@ -6,7 +6,8 @@
 import { h, modal, toast } from '../util/dom.js';
 import { renderShell } from './shell.js';
 import { loadObra, ensureCatalogoBaseline, listOrdenesCambio, saveOrdenCambio, deleteOrdenCambio,
-         setOrdenCambioEstado, aplicarOrdenCambio, setAvanceObra } from '../services/db.js';
+         setOrdenCambioEstado, aplicarOrdenCambio, setAvanceObra, publicarContratoVigente,
+         getObraLinks, pushBuzonItem } from '../services/db.js';
 import { money, num, dateMx } from '../util/format.js';
 import { navigate } from '../state/router.js';
 import { computeEjecutadoPorConcepto, computeAvanceObra, exportOrdenCambioPdf } from '../services/export.js';
@@ -48,6 +49,8 @@ function itemImpacto(item, conceptosMap) {
   }
   return { aditivo: 0, deductivo: 0 };
 }
+
+const r2 = (x) => Math.round((Number(x) || 0) * 100) / 100;
 
 function ocTotales(oc, conceptosMap) {
   let aditivo = 0, deductivo = 0;
@@ -127,6 +130,15 @@ export async function renderOrdenesCambio({ params }) {
     if (oc.estado === 'aplicada') { sumAditAplic += oc.montoAditivo || 0; sumDeductAplic += oc.montoDeductivo || 0; }
   }
 
+  // Mantén fresco el contrato consolidado que leen las apps hermanas, aunque la
+  // obra todavía no tenga ninguna OC aplicada (así siempre hay nodo que leer).
+  try {
+    publicarContratoVigente(obraId, buildContratoPayload({
+      contratoCIVA: Number(m.montoContratoCIVA) || contratoVigente * (1 + Number(m.ivaPct ?? 0.16)),
+      catalogoVigenteSubtotal: contratoVigente
+    }));
+  } catch (err) { console.error('No se pudo publicar el contrato vigente', err); }
+
   drawLista();
 
   // ===================== LISTA =====================
@@ -141,6 +153,10 @@ export async function renderOrdenesCambio({ params }) {
         kvBig('Σ Aditivas (aplicadas)', '+' + money(sumAditAplic), sumAditAplic ? 'ok' : ''),
         kvBig('Σ Deductivas (aplicadas)', '−' + money(sumDeductAplic), sumDeductAplic ? 'warn' : ''),
         kvBig('Contrato vigente', money(contratoVigente), 'accent')
+      ]),
+      h('div', { class: 'row', style: { marginTop: '10px', paddingTop: '10px', borderTop: '1px solid var(--border)', fontSize: '12px', flexWrap: 'wrap' } }, [
+        h('div', {}, [h('span', { class: 'muted' }, 'Contrato formal vigente (c/IVA): '), h('b', { class: 'mono' }, money(Number(m.montoContratoCIVA) || 0))]),
+        h('span', { class: 'tag muted', title: 'Publicado en /shared/contratos para bitácora, compras y materiales' }, '↗ publicado a las apps hermanas')
       ]),
       h('p', { class: 'muted', style: { fontSize: '11px', marginTop: '8px' } },
         'El baseline (contrato original) quedó congelado. Las OC en borrador/aprobada NO cambian el contrato vigente ni afectan a las apps hermanas; solo cotizan el impacto. Al APLICAR una OC aprobada, sus cambios entran al catálogo vigente y se reflejan en las apps hermanas.'),
@@ -239,8 +255,24 @@ export async function renderOrdenesCambio({ params }) {
 
   // Arma la mutación del catálogo para una OC (conceptos nuevos + patches),
   // revalidando el ejecutado (no se puede dejar por debajo de lo ya ejecutado).
+  // Cantidad ya comprometida con subcontratistas por concepto (app-compras).
+  // Reducir por debajo de esto no se bloquea, pero sí se avisa: dejaría al
+  // subcontrato con alcance que ya no existe en el catálogo.
+  function comprometidoConSubs(conceptoId) {
+    let total = 0; const nombres = [];
+    for (const sub of Object.values(obra.subcontratos || {})) {
+      if (sub.meta?.estado !== 'adjudicado') continue;
+      for (const cs of (sub.conceptos || [])) {
+        if (cs.conceptoId !== conceptoId) continue;
+        const c = Number(cs.cantidadSub) || 0;
+        if (c > 0) { total += c; nombres.push(sub.meta?.nombre || 'subcontrato'); }
+      }
+    }
+    return { total, nombres };
+  }
+
   function buildAplicacion(oc) {
-    const conceptosNuevos = {}, conceptosPatch = {}, errores = [];
+    const conceptosNuevos = {}, conceptosPatch = {}, errores = [], avisos = [];
     const cambios = { agregados: 0, modificados: 0, quitados: 0, archivados: 0 };
     let ordenMax = 0;
     for (const c of Object.values(conceptosMap)) ordenMax = Math.max(ordenMax, Number(c.orden) || 0);
@@ -273,47 +305,168 @@ export async function renderOrdenesCambio({ params }) {
           nueva = actual - quita;
         } else { nueva = Number(it.despues) || 0; }
         if (nueva < ejec - 1e-6) { errores.push(`${c.clave || c.descripcion}: quedaría en ${num(nueva, 2)}, por debajo de lo ejecutado (${num(ejec, 2)}).`); return; }
+        const sub = comprometidoConSubs(it.conceptoId);
+        if (sub.total > 0 && nueva < sub.total - 1e-6) {
+          avisos.push(`${c.clave || c.descripcion}: quedaría en ${num(nueva, 2)} pero hay ${num(sub.total, 2)} ${c.unidad || ''} adjudicados a ${[...new Set(sub.nombres)].join(', ')}.`);
+        }
         if (nueva <= 1e-6) { conceptosPatch[it.conceptoId] = { cantidad: 0, total: 0, archivado: true }; cambios.quitados++; cambios.archivados++; }
         else { conceptosPatch[it.conceptoId] = { cantidad: nueva, total: nueva * pu }; if (it.accion === 'quitar') cambios.quitados++; else cambios.modificados++; }
       }
     });
-    return { conceptosNuevos, conceptosPatch, errores, cambios };
+    return { conceptosNuevos, conceptosPatch, errores, avisos, cambios };
+  }
+
+  // Contrato consolidado que publicamos en /shared/contratos/{obraId} para que
+  // bitácora, compras y materiales lean UNA sola verdad: cuál es el contrato en
+  // pie, cuánto lo movieron las OC aplicadas y cómo se reparte por rubro.
+  function buildContratoPayload({ ocAplicandose = null, contratoCIVA, catalogoVigenteSubtotal } = {}) {
+    const todas = { ...ocs };
+    if (ocAplicandose) todas[ocAplicandose.id] = { ...(todas[ocAplicandose.id] || {}), ...ocAplicandose, estado: 'aplicada' };
+
+    const aplicadas = {};
+    let aditAcum = 0, deductAcum = 0;
+    const rub = { ...rubrosZero };
+    for (const [id, oc] of Object.entries(todas)) {
+      if (oc.estado !== 'aplicada') continue;
+      const ad = Number(oc.montoAditivo) || 0, de = Number(oc.montoDeductivo) || 0;
+      aditAcum += ad; deductAcum += de;
+      const r = oc.impactoRubros || {};
+      for (const k in rubrosZero) rub[k] = (rub[k] || 0) + (Number(r[k]) || 0);
+      aplicadas[id] = {
+        numero: oc.numero || 0, fecha: oc.fecha || null, descripcion: oc.descripcion || '',
+        aplicadaAt: oc.aplicadaAt || null,
+        montoAditivo: r2(ad), montoDeductivo: r2(de), montoNeto: r2(ad - de),
+        impactoRubros: oc.impactoRubros || null
+      };
+    }
+    const ivaPct = Number(m.ivaPct ?? 0.16);
+    const netoAcum = aditAcum - deductAcum;
+    const total = Number(contratoCIVA) || 0;
+    const subtotal = total / (1 + ivaPct);
+    for (const k in rub) rub[k] = r2(rub[k]);
+    return {
+      obraNombre: m.nombre || '', ivaPct,
+      // Contrato FORMAL vigente (el que se firma y contra el que se mide el avance)
+      contrato: { subtotal: r2(subtotal), iva: r2(total - subtotal), total: r2(total) },
+      contratoOriginalCIVA: r2(total - netoAcum * (1 + ivaPct)),
+      // Σ de precios unitarios del catálogo (puede diferir del contrato formal)
+      catalogo: { originalSubtotal: r2(contratoOriginal), vigenteSubtotal: r2(catalogoVigenteSubtotal) },
+      ordenesCambio: {
+        count: Object.keys(aplicadas).length,
+        aditivasAcum: r2(aditAcum), deductivasAcum: r2(deductAcum), netoAcum: r2(netoAcum),
+        netoAcumCIVA: r2(netoAcum * (1 + ivaPct)),
+        aplicadas
+      },
+      // Movimiento acumulado por rubro (con signo) — bitácora ajusta su presupuesto
+      rubrosAcum: rub
+    };
   }
 
   async function aplicarOC(oc) {
-    const { conceptosNuevos, conceptosPatch, errores, cambios } = buildAplicacion(oc);
+    const { conceptosNuevos, conceptosPatch, errores, avisos, cambios } = buildAplicacion(oc);
     if (errores.length) { toast(errores[0], 'danger'); return; }
     const t = ocTotales(oc, conceptosMap);
+    const r = ocRubros(oc);
     const ivaPct = Number(m.ivaPct ?? 0.16);
-    const nuevoContrato = (contratoVigente + t.neto) * (1 + ivaPct);
+    const contratoAntesCIVA = Number(m.montoContratoCIVA) || contratoVigente * (1 + ivaPct);
+
+    // El contrato se DERIVA de la cascada OPUS con el nuevo costo directo. Así el
+    // contrato, la integración y el % de avance quedan siempre en el mismo idioma.
+    // Sin integración (obra vieja), se cae al cálculo por catálogo.
+    const integracionInput = integ ? { ...integ, costo_directo: (Number(integ.costo_directo) || 0) + r.costoDirecto } : null;
+    const nuevoContrato = integracionInput
+      ? computeContrato(integracionInput).monto_con_iva
+      : contratoAntesCIVA + t.neto * (1 + ivaPct);
+
+    const fmt = v => (v >= 0 ? '+' : '−') + money(Math.abs(v));
     const ok = await modal({
       title: `Aplicar OC #${oc.numero} al catálogo`, confirmLabel: 'Aplicar al catálogo',
       body: h('div', {}, [
-        h('p', {}, 'Esto modifica el CATÁLOGO VIGENTE que leen todas las apps hermanas (bitácora, compras, materiales). El contrato original queda congelado como baseline.'),
+        h('p', {}, 'Esto hace que el cambio de alcance SURTA EFECTO en toda la suite: el catálogo vigente, el contrato de la obra y lo que leen bitácora, compras y materiales.'),
         h('ul', { style: { fontSize: '13px', lineHeight: 1.7 } }, [
-          cambios.agregados ? h('li', {}, `${cambios.agregados} concepto(s) nuevo(s)`) : null,
+          cambios.agregados ? h('li', {}, `${cambios.agregados} concepto(s) nuevo(s) al catálogo`) : null,
           cambios.modificados ? h('li', {}, `${cambios.modificados} concepto(s) con cantidad modificada`) : null,
           cambios.quitados ? h('li', {}, `${cambios.quitados} concepto(s) reducido(s)${cambios.archivados ? ` — ${cambios.archivados} archivado(s)` : ''}`) : null
         ]),
         h('div', { class: 'row', style: { marginTop: '8px', gap: '18px', flexWrap: 'wrap' } }, [
-          h('div', {}, [h('div', { class: 'muted', style: { fontSize: '11px' } }, 'Contrato vigente actual'), h('b', { class: 'mono' }, money(contratoVigente * (1 + ivaPct)))]),
-          h('div', {}, [h('div', { class: 'muted', style: { fontSize: '11px' } }, 'Contrato con OC aplicada'), h('b', { class: 'mono', style: { color: 'var(--accent)' } }, money(nuevoContrato))])
+          h('div', {}, [h('div', { class: 'muted', style: { fontSize: '11px' } }, 'Contrato vigente actual'), h('b', { class: 'mono' }, money(contratoAntesCIVA))]),
+          h('div', {}, [h('div', { class: 'muted', style: { fontSize: '11px' } }, 'Contrato con la OC aplicada'), h('b', { class: 'mono', style: { color: 'var(--accent)' } }, money(nuevoContrato))])
         ]),
-        h('p', { class: 'muted', style: { fontSize: '11px', marginTop: '10px' } }, 'Para deshacerlo habría que capturar una OC inversa.')
+        avisos.length > 0 && h('div', { style: { marginTop: '10px' } }, [
+          h('div', { class: 'tag warn' }, `⚠ ${avisos.length} concepto(s) quedarían por debajo de lo ya adjudicado a subcontratistas`),
+          h('ul', { style: { fontSize: '11px', lineHeight: 1.6, color: 'var(--warn)', marginTop: '6px' } }, avisos.map(a => h('li', {}, a))),
+          h('div', { class: 'muted', style: { fontSize: '11px' } }, 'Se puede aplicar, pero habrá que renegociar ese alcance con el subcontratista en app-compras.')
+        ]),
+        h('div', { style: { marginTop: '12px', paddingTop: '10px', borderTop: '1px solid var(--border)', fontSize: '12px' } }, [
+          h('div', { class: 'muted', style: { marginBottom: '4px' } }, 'Ajuste que recibirá bitácora en su presupuesto por rubro:'),
+          h('div', { class: 'row', style: { gap: '14px', flexWrap: 'wrap' } }, [
+            h('span', {}, ['Costo directo ', h('b', { class: 'mono' }, fmt(r.costoDirecto))]),
+            h('span', {}, ['Indirectos ', h('b', { class: 'mono' }, fmt(r.indOficina + r.indCampo))]),
+            h('span', {}, ['Utilidad ', h('b', { class: 'mono' }, fmt(r.utilidad))])
+          ])
+        ]),
+        h('p', { class: 'muted', style: { fontSize: '11px', marginTop: '10px' } }, 'El contrato original queda congelado como baseline. Para deshacerlo hay que capturar una OC inversa.')
       ])
     });
     if (!ok) return;
+
+    const aplicadaAt = Date.now();
+    const ocAplicada = {
+      id: oc.id, numero: oc.numero, fecha: oc.fecha, descripcion: oc.descripcion,
+      montoAditivo: r2(t.aditivo), montoDeductivo: r2(t.deductivo), impactoRubros: oc.impactoRubros, aplicadaAt
+    };
+    const contrato = buildContratoPayload({
+      ocAplicandose: ocAplicada,
+      contratoCIVA: nuevoContrato,
+      catalogoVigenteSubtotal: contratoVigente + t.neto
+    });
+
     try {
       await aplicarOrdenCambio(obraId, oc.id, {
-        conceptosNuevos, conceptosPatch,
-        ocPatch: { estado: 'aplicada', aplicadaAt: Date.now(), aplicadaPor: state.user?.uid || null, contratoAntes: contratoVigente * (1 + ivaPct), contratoDespues: nuevoContrato },
+        conceptosNuevos, conceptosPatch, integracionInput, contrato,
+        ocPatch: {
+          estado: 'aplicada', aplicadaAt, aplicadaPor: state.user?.uid || null,
+          contratoAntes: r2(contratoAntesCIVA), contratoDespues: r2(nuevoContrato)
+        },
         metaPatch: { montoContratoCIVA: nuevoContrato }
       });
-      // Re-publica el avance para bitácora (cambió el denominador del contrato).
-      try { const fresh = await loadObra(obraId); const av = computeAvanceObra(fresh); if (av) await setAvanceObra(obraId, av); } catch {}
-      toast('OC aplicada al catálogo vigente', 'ok');
-      renderOrdenesCambio({ params });
-    } catch (err) { toast('Error al aplicar: ' + err.message, 'danger'); }
+    } catch (err) { toast('Error al aplicar: ' + err.message, 'danger'); return; }
+
+    // A partir de aquí la OC YA quedó aplicada. Lo que sigue son avisos a las
+    // apps hermanas: si algo falla, se avisa pero no se deshace el cambio.
+    try {
+      const fresh = await loadObra(obraId);
+      const av = computeAvanceObra(fresh);
+      if (av) await setAvanceObra(obraId, av);          // el % de avance cambió de denominador
+    } catch (err) { console.error('No se pudo republicar el avance', err); }
+
+    try { await avisarContador(oc, t, r, contratoAntesCIVA, nuevoContrato); }
+    catch (err) { toast('OC aplicada, pero no se pudo avisar al contador: ' + err.message, 'warn'); }
+
+    toast('OC aplicada — catálogo, contrato y apps hermanas actualizados', 'ok');
+    renderOrdenesCambio({ params });
+  }
+
+  // Deja la OC aplicada en el buzón para que el contador ajuste su presupuesto
+  // por rubro. Mismo canal que usan los pagos de estimación.
+  async function avisarContador(oc, t, r, antesCIVA, despuesCIVA) {
+    const ivaPct = Number(m.ivaPct ?? 0.16);
+    let proyectoId = null;
+    try { proyectoId = (await getObraLinks())?.[obraId] || null; } catch {}
+    await pushBuzonItem({
+      tipo: 'orden_cambio',
+      origenApp: 'estimaciones',
+      obraId, obraNombre: m.nombre || '', proyectoId,
+      ocId: oc.id, ocNumero: oc.numero || 0,
+      descripcion: `Orden de cambio #${oc.numero} aplicada — ${oc.descripcion || 'cambio de alcance'}${proyectoId ? '' : ' — obra sin vincular a proyecto contable'}`,
+      montoAditivo: r2(t.aditivo), montoDeductivo: r2(t.deductivo), montoNeto: r2(t.neto),
+      iva: r2(t.neto * ivaPct), netoCIVA: r2(t.neto * (1 + ivaPct)), ivaPct,
+      impactoRubros: oc.impactoRubros || null,
+      contratoAntesCIVA: r2(antesCIVA), contratoDespuesCIVA: r2(despuesCIVA),
+      fecha: oc.fecha || Date.now(),
+      estado: 'pendiente',
+      creadoPor: state.user?.uid || ''
+    });
   }
 
   // Botones de transición de estado para una OC (solo admin).

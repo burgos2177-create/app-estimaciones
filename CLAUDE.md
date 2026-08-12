@@ -70,6 +70,68 @@ App web para el ingeniero de campo. Sister app de **SOGRUB Bitácora Financiera*
     # incluye conceptos sin generador (capturados directo)
 ```
 
+## Órdenes de Cambio (aditivas / deductivas)
+
+Viven en el catálogo compartido porque el catálogo ES la frontera entre apps.
+
+```
+/shared/catalogos/{obraId}:
+  conceptos/{conceptoKey}     # CATÁLOGO VIGENTE — fuente de verdad de la suite
+  baseline: { conceptos, congeladoAt }   # contrato ORIGINAL, inmutable
+  ordenesCambio/{ocId}:
+    numero,                   # por obra
+    descripcion, fecha, tipo: "aditiva" | "deductiva" | "mixta",
+    estado: "borrador" | "aprobada" | "aplicada" | "rechazada",
+    items: [
+      { accion: "agregar",   clave, descripcion, unidad, cantidad,
+        costoDirectoUnit, pu },              # pu DERIVADO de la cascada OPUS
+      { accion: "modificar", conceptoId, despues },   # nueva cantidad absoluta
+      { accion: "quitar",    conceptoId, cantidad }   # cantidad a quitar (parcial)
+    ],
+    montoAditivo, montoDeductivo, montoNeto,          # sin IVA
+    impactoRubros: { costoDirecto, indOficina, indCampo,
+                     financiamiento, utilidad, cargos, otro, venta },  # con signo
+    aprobadaAt/Por, aplicadaAt/Por, contratoAntes, contratoDespues
+```
+
+**Ciclo de vida.** `borrador` cotiza el impacto sin tocar nada. `aprobada` = firmada
+por el cliente (bloquea edición). `aplicar` es la operación que hace que surta
+efecto, y se escribe en UNA actualización multi-path (atómica):
+
+1. `/shared/catalogos/{obraId}/conceptos` — agrega los nuevos (con `ocOrigen`),
+   ajusta cantidades, archiva los que quedan en 0.
+2. `obras/{obraId}/integracion` + `meta.montoContratoCIVA` — el contrato se
+   RE-DERIVA de la cascada con `costo_directo + impactoRubros.costoDirecto`.
+   Es obligatorio: `buildResumenData` y `computeAvanceObra` prefieren
+   `integracion.subtotal_venta` como denominador del avance.
+3. `/shared/contratos/{obraId}` — contrato consolidado (ver abajo).
+4. Después (fuera de la transacción): republica `/shared/avanceObra/{obraId}` y
+   deja un item `tipo: "orden_cambio"` en `/shared/buzon`.
+
+Guardas: no se puede dejar un concepto por debajo de lo **ejecutado** (error), y
+se **avisa** si queda por debajo de lo adjudicado a subcontratistas. Al aplicar se
+re-lee el estado en RTDB para que una pestaña vieja no aplique dos veces.
+
+## Contrato vigente publicado (lo que leen las apps hermanas)
+
+```
+/shared/contratos/{obraId}:      # escritor ÚNICO: estimaciones
+  obraNombre, ivaPct
+  contrato: { subtotal, iva, total }        # contrato FORMAL vigente
+  contratoOriginalCIVA                      # antes de cualquier OC
+  catalogo: { originalSubtotal, vigenteSubtotal }   # Σ PUs (puede diferir del contrato)
+  ordenesCambio: { count, aditivasAcum, deductivasAcum, netoAcum, netoAcumCIVA,
+                   aplicadas/{ocId}: { numero, fecha, descripcion, aplicadaAt,
+                                       montoAditivo, montoDeductivo, montoNeto,
+                                       impactoRubros } }
+  rubrosAcum: { costoDirecto, indOficina, indCampo, financiamiento,
+                utilidad, cargos, otro, venta }   # movimiento acumulado, con signo
+  updatedAt, origenApp: "estimaciones"
+```
+
+Bitácora ajusta su **presupuesto por rubro** sumando `rubrosAcum` al presupuesto
+original. Compras/materiales leen `conceptos` (ya vigente) y `contrato` para topes.
+
 ## Estructura de archivos
 
 ```
