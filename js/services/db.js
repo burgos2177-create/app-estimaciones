@@ -4,7 +4,7 @@ import {
 import { db } from './firebase.js';
 import { APP_BASE_PATH } from '../config/firebase-config.js';
 import { computeStableKey, computeConceptoKey, sanitizeConcepto } from './catalogo-keys.js';
-import { computeContrato } from './contrato.js';
+import { computeContrato, computeAnticipo } from './contrato.js';
 
 // Prefija toda path relativa con APP_BASE_PATH (e.g. "obras/X" → "legacy/estimaciones/obras/X").
 // Para escapes que necesiten path absoluto en el RTDB compartido (p.ej. /shared/buzon),
@@ -62,7 +62,17 @@ export async function listObrasForUser(user) {
 // Construye el bloque `integracion` persistible desde los inputs crudos + la
 // cascada derivada. Exclusivo de estimaciones (nadie más escribe aquí).
 function buildIntegracionBlock(input, c) {
+  const anticipo_pct = Number(input.anticipo_pct) || 0;
+  const anticipo_base = input.anticipo_base === 'total_c_iva' ? 'total_c_iva' : 'subtotal';
+  // El anticipo OTORGADO es un hecho de caja: se depositó una vez, sobre el
+  // contrato vigente en ese momento. Se congela aquí y NO se re-deriva cuando
+  // una orden de cambio mueve el contrato (si no, cambiaría retroactivamente
+  // dinero que ya entró). `aplicarOrdenCambio` lo arrastra tal cual.
+  const anticipo_monto = input.anticipo_monto != null
+    ? Number(input.anticipo_monto) || 0
+    : computeAnticipo(c, anticipo_pct, anticipo_base);
   return {
+    anticipo_monto,
     costo_directo: c.costo_directo,
     pct_ind_oficina: c.pct_ind_oficina,
     pct_ind_campo: c.pct_ind_campo,
@@ -74,8 +84,8 @@ function buildIntegracionBlock(input, c) {
     iva_pct: c.iva_pct,
     iva_monto: c.iva_monto,                  // DERIVADO
     monto_con_iva: c.monto_con_iva,          // DERIVADO (= contrato)
-    anticipo_pct: Number(input.anticipo_pct) || 0,
-    anticipo_base: input.anticipo_base === 'total_c_iva' ? 'total_c_iva' : 'subtotal',
+    anticipo_pct,
+    anticipo_base,
     updatedAt: Date.now()
   };
 }
@@ -720,6 +730,15 @@ export async function removeGeneradorAttachment(obraId, gid, kind, driveId) {
   const list = (Array.isArray(cur) ? cur : Object.values(cur)).filter(a => a.driveId !== driveId);
   await set(_ref(path), list);
   return list;
+}
+
+// Monto del anticipo OTORGADO (contractual). Se congela en `integracion` para
+// que una orden de cambio no lo re-derive: es dinero que ya se depositó sobre el
+// contrato de ese momento. null/'' lo borra → vuelve a derivarse del contrato.
+export async function setAnticipoOtorgado(obraId, monto) {
+  const path = `obras/${obraId}/integracion/anticipo_monto`;
+  if (monto == null || monto === '') await remove(_ref(path));
+  else await set(_ref(path), Number(monto) || 0);
 }
 
 export async function setPagoCliente(obraId, estimId, pago) {

@@ -4,7 +4,7 @@
 
 import { h, modal, toast, buzonBadge } from '../util/dom.js';
 import { renderShell } from './shell.js';
-import { rread, loadObra, setPagoCliente, setEstimacionIvaMonto, updateObraMeta, getObraLinks, listBuzonItems, pushBuzonItem, updateBuzonItem, setAvanceObra } from '../services/db.js';
+import { rread, loadObra, setPagoCliente, setEstimacionIvaMonto, updateObraMeta, getObraLinks, listBuzonItems, pushBuzonItem, updateBuzonItem, setAvanceObra, setAnticipoOtorgado, getContratoVigente } from '../services/db.js';
 import { state } from '../state/store.js';
 import { money, num, dateMx, pct } from '../util/format.js';
 import { buildResumenData, exportResumenPdf, exportResumenXlsx, exportEstimacionJson, computeAvanceObra } from '../services/export.js';
@@ -53,7 +53,7 @@ async function draw(obraId, obra, estId) {
   const ests = obra.estimaciones || {};
   const estsArr = Object.entries(ests).map(([id, e]) => ({ id, ...e })).sort((a, b) => (a.numero || 0) - (b.numero || 0));
   const data = buildResumenData(obra, estId);
-  const { est, ivaPct, anticipoPct, rows, subtotalEsta, ivaEsta, ivaAcum, ivaManual, importeEsta, avPond, importeAcumEjec, importeAcumEjecCIVA, subtotalPagado, ivaPagado, importePagado, diferencia, diferenciaPct, anticipoMontoBase, amortizacionEsta, amortizacionAcum, saldoAnticipoPorAmortizar, netoEsta, netoAcum, anticipoRecibido, totalRecibidoCliente, saldoCaja, excesoAnticipo, abonosCliente, subtotalAbono, sugeridoPagoJusto, amortizacionAcumHasta, netoAcumHasta, pagosPrevios, subtotalRecibidoCaja, ivaRecibidoCaja, saldoSubtotalCaja, ivaEjecCaja, saldoIvaCaja } = data;
+  const { est, ivaPct, anticipoPct, rows, subtotalEsta, ivaEsta, ivaAcum, ivaManual, importeEsta, avPond, importeAcumEjec, importeAcumEjecCIVA, subtotalPagado, ivaPagado, importePagado, diferencia, diferenciaPct, anticipoMontoBase, amortizacionEsta, amortizacionAcum, saldoAnticipoPorAmortizar, remanenteFiniquito, netoEsta, netoAcum, anticipoRecibido, totalRecibidoCliente, saldoCaja, excesoAnticipo, abonosCliente, subtotalAbono, sugeridoPagoJusto, amortizacionAcumHasta, netoAcumHasta, pagosPrevios, subtotalRecibidoCaja, ivaRecibidoCaja, saldoSubtotalCaja, ivaEjecCaja, saldoIvaCaja } = data;
 
   // Publica el avance + historial a /shared para bitácora. Usa computeAvanceObra
   // (misma fuente que las demás vistas) para NO borrar el historial al reescribir
@@ -85,12 +85,35 @@ async function draw(obraId, obra, estId) {
 
   // Bloque de anticipo (solo si > 0)
   const anticipoCard = anticipoPct > 0 ? h('div', { class: 'card' }, [
-    h('h3', {}, `Anticipo (${pct(anticipoPct)})`),
+    h('div', { class: 'row' }, [
+      h('h3', { style: { margin: 0 } }, `Anticipo (${pct(anticipoPct)})`),
+      h('div', { style: { flex: 1 } }),
+      h('button', {
+        class: 'btn sm ghost',
+        title: 'Monto del anticipo realmente otorgado. Se congela para que una orden de cambio no lo recalcule.',
+        onClick: async () => { const ok = await editAnticipoOtorgadoDialog(obraId, obra, anticipoMontoBase, anticipoPct); if (ok) renderResumen({ params: { id: obraId } }); }
+      }, '✎ Anticipo otorgado')
+    ]),
     h('div', { class: 'grid-4' }, [
       kvBig('Anticipo otorgado', money(anticipoMontoBase), ''),
       kvBig('Amortización (esta)', money(amortizacionEsta), 'warn'),
       kvBig('Amortización acum.', money(amortizacionAcum), 'warn'),
       kvBig('Saldo por amortizar', money(saldoAnticipoPorAmortizar), saldoAnticipoPorAmortizar > 0 ? '' : 'ok')
+    ]),
+    // Tras una orden de cambio el contrato se mueve pero el anticipo NO: se
+    // sigue amortizando a la tasa original y el sobrante se salda al final.
+    Math.abs(remanenteFiniquito || 0) > 0.01 && h('div', { style: { marginTop: '12px', paddingTop: '10px', borderTop: '1px solid var(--border)', fontSize: '12px' } }, [
+      h('span', { class: 'tag warn' }, '⚠ Ajuste de finiquito'),
+      h('span', { style: { marginLeft: '8px' } }, [
+        'Amortizando al ', h('b', {}, pct(anticipoPct)), ' sobre el contrato vigente se recuperan ',
+        h('b', { class: 'mono' }, money(anticipoMontoBase - remanenteFiniquito)), ' de los ',
+        h('b', { class: 'mono' }, money(anticipoMontoBase)), ' otorgados. ',
+        remanenteFiniquito > 0
+          ? h('span', {}, ['Quedan ', h('b', { class: 'mono warn' }, money(remanenteFiniquito)), ' que el cliente debe descontar en el finiquito.'])
+          : h('span', {}, ['Se amortizarían ', h('b', { class: 'mono warn' }, money(-remanenteFiniquito)), ' de más, a devolver en el finiquito.'])
+      ]),
+      h('div', { class: 'muted', style: { fontSize: '11px', marginTop: '4px' } },
+        'El anticipo otorgado quedó congelado sobre el contrato original; una orden de cambio movió el contrato y no se recalcula dinero ya depositado.')
     ])
   ]) : null;
 
@@ -306,6 +329,50 @@ async function editIvaDialog(obraId, estId, est) {
       try {
         await setEstimacionIvaMonto(obraId, estId, rManual.checked ? (Number(montoIn.value) || 0) : null);
         toast('IVA actualizado', 'ok');
+        return true;
+      } catch (err) { toast('Error: ' + err.message, 'danger'); return false; }
+    }
+  });
+}
+
+// Anticipo OTORGADO (contractual). Se congela en integracion.anticipo_monto para
+// que una orden de cambio no lo re-derive sobre el contrato nuevo: el anticipo se
+// depositó una vez, sobre el contrato de ese momento. Si la obra ya tiene OC
+// aplicadas, sugiere el monto calculado sobre el contrato ORIGINAL.
+async function editAnticipoOtorgadoDialog(obraId, obra, actual, anticipoPct) {
+  const integ = obra.integracion || {};
+  const congelado = Number(integ.anticipo_monto) || 0;
+  const ivaPctObra = Number(obra.meta?.ivaPct ?? 0.16);
+
+  let sugerido = null, nota = null;
+  try {
+    const ct = await getContratoVigente(obraId);
+    if (ct && (ct.ordenesCambio?.count || 0) > 0 && ct.contratoOriginalCIVA) {
+      const base = integ.anticipo_base === 'total_c_iva'
+        ? Number(ct.contratoOriginalCIVA)
+        : Number(ct.contratoOriginalCIVA) / (1 + ivaPctObra);
+      sugerido = base * anticipoPct;
+      nota = `Esta obra tiene ${ct.ordenesCambio.count} orden(es) de cambio aplicada(s). Sobre el contrato ORIGINAL de ${money(ct.contratoOriginalCIVA)} c/IVA, el ${pct(anticipoPct)} son ${money(sugerido)}.`;
+    }
+  } catch {}
+
+  const inp = h('input', { type: 'number', step: '0.01', value: congelado || '', placeholder: (sugerido || actual || 0).toFixed(2) });
+  return await modal({
+    title: 'Anticipo otorgado (contractual)',
+    body: h('div', {}, [
+      h('p', { class: 'muted', style: { fontSize: '12px', marginTop: 0 } }, 'Monto del anticipo que se otorgó por contrato. Queda congelado: si una orden de cambio mueve el contrato, este monto NO se recalcula, porque es dinero que ya se depositó.'),
+      nota && h('div', { class: 'tag warn', style: { marginBottom: '8px' } }, '⚠ ' + nota),
+      h('div', { class: 'field' }, [h('label', {}, 'Anticipo otorgado'), inp]),
+      sugerido ? h('div', { style: { marginTop: '8px' } }, h('button', {
+        class: 'btn sm', onClick: () => { inp.value = (Math.round(sugerido * 100) / 100).toFixed(2); }
+      }, `Usar ${money(sugerido)} (contrato original)`)) : null,
+      h('p', { class: 'muted', style: { fontSize: '11px', marginTop: '10px' } }, `Déjalo vacío para que se derive automáticamente del contrato vigente (${money(actual)}).`)
+    ]),
+    confirmLabel: 'Guardar',
+    onConfirm: async () => {
+      try {
+        await setAnticipoOtorgado(obraId, inp.value === '' ? null : inp.value);
+        toast('Anticipo otorgado actualizado', 'ok');
         return true;
       } catch (err) { toast('Error: ' + err.message, 'danger'); return false; }
     }

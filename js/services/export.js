@@ -420,7 +420,14 @@ export function buildResumenData(obra, estId) {
   const anticipoBase = obra.integracion?.anticipo_base || 'subtotal';
   const subtotalContrato = Number(obra.integracion?.subtotal_venta)
     || ((Number(m.montoContratoCIVA) || 0) / (1 + ivaPct));
-  const anticipoMontoBase = subtotalContrato * anticipoPct;     // anticipo sin IVA
+  // El anticipo OTORGADO se congela al firmarse (`integracion.anticipo_monto`):
+  // es dinero que ya entró, sobre el contrato de ese momento. Si una orden de
+  // cambio mueve el contrato, el anticipo NO se recalcula. Obras anteriores a
+  // este campo siguen derivándolo del contrato vigente (comportamiento viejo).
+  const anticipoCongelado = Number(obra.integracion?.anticipo_monto) || 0;
+  const anticipoMontoBase = anticipoCongelado > 0                // anticipo sin IVA
+    ? (anticipoBase === 'total_c_iva' ? anticipoCongelado / (1 + ivaPct) : anticipoCongelado)
+    : subtotalContrato * anticipoPct;
   const anticipoMontoCIVA = anticipoMontoBase * (1 + ivaPct);
   // Tasa de amortización sobre el subtotal ejecutado. Con base 'total_c_iva' se
   // amortiza pct*(1+iva) para recuperar el anticipo calculado sobre el monto c/IVA.
@@ -429,6 +436,11 @@ export function buildResumenData(obra, estId) {
   const amortizacionAcum = importeAcumEjec * amortRate;
   const anticipoTotal = anticipoBase === 'total_c_iva' ? anticipoMontoCIVA : anticipoMontoBase;
   const saldoAnticipoPorAmortizar = anticipoTotal - amortizacionAcum;
+  // Si una orden de cambio movió el contrato, amortizar a la tasa original ya no
+  // recupera exactamente el anticipo: al llegar al 100% de avance queda un
+  // remanente (+ a favor de SOGRUB, − por devolver) que se salda en el finiquito.
+  const amortizacionAl100 = subtotalContrato * amortRate;
+  const remanenteFiniquito = anticipoTotal - amortizacionAl100;
   const netoEsta = importeEstaBruto - amortizacionEsta;
   const netoAcum = importeAcumEjecCIVA - amortizacionAcum;
 
@@ -497,6 +509,7 @@ export function buildResumenData(obra, estId) {
     avPond, importeAcumEjec, importeAcumEjecCIVA,
     anticipoMontoBase, anticipoMontoCIVA, anticipoTotal,
     amortizacionEsta, amortizacionAcum, saldoAnticipoPorAmortizar,
+    anticipoCongelado, remanenteFiniquito,
     netoEsta, netoAcum,
     pagoCliente: est.pagoCliente || null,
     diferencia: netoAcum - abonosCliente,

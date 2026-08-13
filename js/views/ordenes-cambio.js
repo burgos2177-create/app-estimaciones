@@ -11,7 +11,7 @@ import { loadObra, ensureCatalogoBaseline, listOrdenesCambio, saveOrdenCambio, d
 import { money, num, dateMx } from '../util/format.js';
 import { navigate } from '../state/router.js';
 import { computeEjecutadoPorConcepto, computeAvanceObra, exportOrdenCambioPdf } from '../services/export.js';
-import { computeContrato } from '../services/contrato.js';
+import { computeContrato, computeAnticipo } from '../services/contrato.js';
 import { computeConceptoKey } from '../services/catalogo-keys.js';
 import { state } from '../state/store.js';
 
@@ -373,7 +373,16 @@ export async function renderOrdenesCambio({ params }) {
     // El contrato se DERIVA de la cascada OPUS con el nuevo costo directo. Así el
     // contrato, la integración y el % de avance quedan siempre en el mismo idioma.
     // Sin integración (obra vieja), se cae al cálculo por catálogo.
-    const integracionInput = integ ? { ...integ, costo_directo: (Number(integ.costo_directo) || 0) + r.costoDirecto } : null;
+    // El anticipo NO se re-deriva: se congela el que ya se otorgó. Si la obra es
+    // anterior a este campo, se toma una foto del contrato ANTES de esta OC.
+    const anticipoCongelado = integ
+      ? (integ.anticipo_monto != null
+        ? Number(integ.anticipo_monto) || 0
+        : computeAnticipo(computeContrato(integ), integ.anticipo_pct, integ.anticipo_base))
+      : 0;
+    const integracionInput = integ
+      ? { ...integ, costo_directo: (Number(integ.costo_directo) || 0) + r.costoDirecto, anticipo_monto: anticipoCongelado }
+      : null;
     const nuevoContrato = integracionInput
       ? computeContrato(integracionInput).monto_con_iva
       : contratoAntesCIVA + t.neto * (1 + ivaPct);
