@@ -2,6 +2,7 @@ import { h, mount } from '../util/dom.js';
 import { state } from '../state/store.js';
 import { logout } from '../services/auth.js';
 import { navigate } from '../state/router.js';
+import { APP_VERSION } from '../config/version.js';
 
 export function renderShell(crumbs, body) {
   const top = h('header', { class: 'topbar' }, [
@@ -9,6 +10,7 @@ export function renderShell(crumbs, body) {
     crumbsView(crumbs),
     h('div', { class: 'spacer' }),
     h('div', { class: 'userchip' }, [
+      h('span', { class: 'role', title: 'Versión del código que está corriendo tu navegador. Si no coincide con la última publicada, recarga.' }, APP_VERSION),
       h('span', {}, state.user?.displayName || state.user?.email || ''),
       h('span', { class: 'role' }, state.user?.role || ''),
       h('button', { class: 'btn ghost sm', onClick: () => logout() }, 'Salir')
