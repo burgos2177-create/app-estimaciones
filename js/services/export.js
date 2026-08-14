@@ -634,6 +634,16 @@ async function blobUrlToDataUrl(url) {
   });
 }
 
+// Un generador es "de proyección" si él mismo está marcado o si lo está su
+// estimación. Proyección = alcance que se creyó cerrar en el periodo y no se
+// logró: no cuenta en los acumulados NI aparece en los PDF (ni la memoria de
+// cálculo ni sus croquis/fotos), porque el PDF documenta lo realmente ejecutado.
+function esGeneradorProyeccion(obra, gen) {
+  if (!gen) return false;
+  if (gen.esProyeccion) return true;
+  return !!obra?.estimaciones?.[gen.estimacionId]?.esProyeccion;
+}
+
 // Recolecta croquis y fotos de los generadores en una estimación, agrupados por concepto.
 function collectAttachments(obra, estId) {
   const generadores = obra.generadores || {};
@@ -642,6 +652,7 @@ function collectAttachments(obra, estId) {
   const groups = new Map();   // conceptoKey → { clave, descripcion, items: [...] }
   for (const [gid, gen] of Object.entries(generadores)) {
     if (gen.estimacionId !== estId) continue;
+    if (esGeneradorProyeccion(obra, gen)) continue;      // proyección no se documenta
     const k = resolveKey(conceptos, keyMap, gen.conceptoId);
     if (!k) continue;
     const concepto = conceptos[k];
@@ -1062,7 +1073,7 @@ function appendMemoriaGeneradores(doc, obra, estId, m) {
   const conceptos = obra.catalogo?.conceptos || {};
   const keyMap = obra.catalogo?.migrationKeyMap;
   const gens = Object.values(obra.generadores || {})
-    .filter(g => g.estimacionId === estId)
+    .filter(g => g.estimacionId === estId && !esGeneradorProyeccion(obra, g))
     .sort((a, b) => (a.numero || 0) - (b.numero || 0));
   if (!gens.length) return;
 

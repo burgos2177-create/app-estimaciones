@@ -28,12 +28,12 @@ export async function renderGaleria({ params }) {
   for (const [gid, gen] of Object.entries(generadores)) {
     if (gen.estimacionId !== estId) continue;
     const concepto = getConceptoById(obra, gen.conceptoId) || {};
-    for (const att of (gen.croquis || [])) {
-      items.push({ ...att, kind: 'croquis', generadorId: gid, generadorNumero: gen.numero, conceptoId: gen.conceptoId, clave: concepto.clave || '?', descripcion: concepto.descripcion || '' });
-    }
-    for (const att of (gen.fotos || [])) {
-      items.push({ ...att, kind: 'foto', generadorId: gid, generadorNumero: gen.numero, conceptoId: gen.conceptoId, clave: concepto.clave || '?', descripcion: concepto.descripcion || '' });
-    }
+    // La galería sí muestra lo de proyección (es vista de trabajo), pero lo marca:
+    // esos adjuntos NO salen en el PDF de la estimación.
+    const proy = !!(gen.esProyeccion || est.esProyeccion);
+    const base = { generadorId: gid, generadorNumero: gen.numero, conceptoId: gen.conceptoId, clave: concepto.clave || '?', descripcion: concepto.descripcion || '', esProyeccion: proy };
+    for (const att of (gen.croquis || [])) items.push({ ...att, kind: 'croquis', ...base });
+    for (const att of (gen.fotos || [])) items.push({ ...att, kind: 'foto', ...base });
   }
 
   // Inicializar Drive (necesario para descargar imágenes)
@@ -148,10 +148,11 @@ export async function renderGaleria({ params }) {
     getImageObjectUrl(att.driveId)
       .then(url => { imgEl.innerHTML = ''; imgEl.appendChild(h('img', { src: url, alt: att.name })); })
       .catch(() => { imgEl.textContent = att.kind === 'foto' ? '📸' : '✏'; });
-    return h('div', { class: 'attach-card', style: { cursor: 'zoom-in' }, onClick: () => openLightbox(att, all) }, [
+    return h('div', { class: 'attach-card', style: { cursor: 'zoom-in', opacity: att.esProyeccion ? .55 : 1 }, onClick: () => openLightbox(att, all) }, [
       imgEl,
       h('div', { class: 'attach-name' }, [
         h('span', { class: 'tag muted', style: { fontSize: '10px', marginRight: '4px' } }, att.kind === 'foto' ? '📸' : '✏'),
+        att.esProyeccion && h('span', { class: 'tag muted', style: { fontSize: '10px', marginRight: '4px' }, title: 'De proyección: no sale en el PDF de la estimación' }, '🔮'),
         att.name
       ])
     ]);
