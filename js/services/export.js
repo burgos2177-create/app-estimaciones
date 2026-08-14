@@ -925,7 +925,7 @@ export async function exportResumenPdf(obra, estId, cfg = {}) {
 
   if (cfg.mostrarEstadoCuenta) {
     let yy = doc.lastAutoTable.finalY + 16;
-    if (yy > 580) { doc.addPage(); yy = 80; }
+    if (yy > 580) yy = nuevaPaginaConPie(doc, m);
 
     doc.setFillColor(245, 248, 252); doc.rect(30, yy, doc.internal.pageSize.width - 60, 18, 'F');
     doc.setFontSize(10); doc.setTextColor(30);
@@ -954,13 +954,19 @@ export async function exportResumenPdf(obra, estId, cfg = {}) {
     });
 
     yy = doc.lastAutoTable.finalY + 14;
-    doc.setFontSize(10); doc.setTextColor(40);
     const lh = 16;
+    const conAmort = cfg.mostrarAmortizacion && anticipoPct > 0;
+    // Este bloque se dibuja con offsets fijos, así que hay que asegurar que quepa
+    // ENTERO arriba del pie de página; si no, se encima con él.
+    const altoBloque = lh * (conAmort ? 3 : 2) + 12;
+    if (yy + altoBloque > doc.internal.pageSize.height - 48) yy = nuevaPaginaConPie(doc, m);
+
+    doc.setFontSize(10); doc.setTextColor(40);
     doc.text(`AVANCE PONDERADO DE OBRA`, 40, yy + lh);
     doc.setTextColor(20); doc.setFontSize(13);
     doc.text(fmtPct(avPond), doc.internal.pageSize.width - 40, yy + lh, { align: 'right' });
 
-    if (cfg.mostrarAmortizacion && anticipoPct > 0) {
+    if (conAmort) {
       doc.setTextColor(40); doc.setFontSize(9);
       doc.text(`SALDO DE ANTICIPO POR AMORTIZAR`, 40, yy + lh * 2);
       doc.setTextColor(20); doc.setFontSize(11);
@@ -976,7 +982,7 @@ export async function exportResumenPdf(obra, estId, cfg = {}) {
 
     // ===== Caja del cliente =====
     let cy = yy + lh * 2 + 18;
-    if (cy > 610) { doc.addPage(); cy = 90; }
+    if (cy > 610) cy = nuevaPaginaConPie(doc, m) + 10;
     const wpg = doc.internal.pageSize.width;
     doc.setFillColor(247, 249, 252); doc.rect(30, cy, wpg - 60, 18, 'F');
     doc.setFont('helvetica', 'bold'); doc.setFontSize(10); doc.setTextColor(30);
@@ -1286,6 +1292,15 @@ function drawFirmas(doc, m, y, docLabel = 'estimación') {
 
   doc.setFontSize(8); doc.setTextColor(120);
   doc.text(`${m.municipio ? m.municipio + ', a ' : 'Lugar y fecha: '}____ de ________________ de 20____`, w / 2, lineY + 58, { align: 'center' });
+}
+
+// Nueva página fuera de autoTable. autoTable dibuja el pie con su hook
+// didDrawPage, pero las páginas que agregamos a mano no pasan por ahí: si no se
+// lo ponemos, quedan sin numerar. Devuelve la Y donde empezar a escribir.
+function nuevaPaginaConPie(doc, m) {
+  doc.addPage();
+  drawFooter(doc, { pageNumber: doc.internal.getNumberOfPages() }, m);
+  return 80;
 }
 
 function drawFooter(doc, data, m) {
