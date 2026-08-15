@@ -1,6 +1,6 @@
 import { h, modal, toast } from '../util/dom.js';
 import { renderShell } from './shell.js';
-import { loadObra, getConceptoById, resolveConceptoKeyLocal, createGenerador, setAvance, deleteGenerador, moveGenerador, setEstimacionProyeccion, setGeneradorProyeccion, setAvanceObra } from '../services/db.js';
+import { loadObra, getConceptoById, resolveConceptoKeyLocal, createGenerador, setAvance, deleteGenerador, moveGenerador, moverGeneradoresAEstimacion, setEstimacionProyeccion, setGeneradorProyeccion, setAvanceObra } from '../services/db.js';
 import { state } from '../state/store.js';
 import { navigate } from '../state/router.js';
 import { money, dateMx, num, num0, pct } from '../util/format.js';
@@ -44,6 +44,93 @@ export async function renderEstimacion({ params }) {
     try {
       await deleteGenerador(obraId, gid);
       toast('Generador borrado', 'ok');
+      renderEstimacion({ params: { id: obraId, estid: estId } });
+    } catch (err) { toast('Error: ' + err.message, 'danger'); }
+  }
+
+  // Trae generadores de otra estimación a esta. Pensado para la proyección que
+  // se dejó armada en el periodo pasado y que en realidad se ejecutó en este:
+  // en vez de recapturar las mediciones, se mueve el generador tal cual.
+  async function traerDeOtraEstimacionFlow() {
+    const otras = Object.entries(obra.estimaciones || {})
+      .filter(([id]) => id !== estId)
+      .map(([id, e]) => ({ id, ...e }))
+      .sort((a, b) => (b.numero || 0) - (a.numero || 0));
+    if (!otras.length) { toast('No hay otra estimación de dónde traer', 'warn'); return; }
+
+    const sel = h('select', { style: { width: '100%' } }, otras.map(e =>
+      h('option', { value: e.id }, `Estimación #${e.numero}${e.esProyeccion ? ' · 🔮 proyección' : ''}${e.estado === 'cerrada' ? ' · cerrada' : ''}`)));
+    const limpiar = h('input', { type: 'checkbox' }); limpiar.checked = true;
+    const lista = h('div', { style: { maxHeight: '320px', overflow: 'auto', border: '1px solid var(--border)', borderRadius: '6px' } });
+    const resumen = h('div', { class: 'muted', style: { fontSize: '12px', marginTop: '8px' } });
+    const seleccion = new Set();
+
+    function pintarLista() {
+      const origen = obra.estimaciones?.[sel.value] || {};
+      const gens = Object.entries(generadores)
+        .filter(([, g]) => g.estimacionId === sel.value)
+        .sort((a, b) => (a[1].numero || 0) - (b[1].numero || 0));
+      seleccion.clear();
+      lista.innerHTML = '';
+      if (!gens.length) {
+        lista.appendChild(h('div', { class: 'muted', style: { padding: '16px', textAlign: 'center' } }, 'Esa estimación no tiene generadores.'));
+        actualizarResumen(0); return;
+      }
+      for (const [gid, g] of gens) {
+        const c = getConceptoById(obra, g.conceptoId) || {};
+        const proy = !!(g.esProyeccion || origen.esProyeccion);
+        const cb = h('input', { type: 'checkbox' });
+        cb.checked = proy;                       // por defecto, solo lo de proyección
+        if (proy) seleccion.add(gid);
+        cb.addEventListener('change', () => {
+          if (cb.checked) seleccion.add(gid); else seleccion.delete(gid);
+          actualizarResumen();
+        });
+        lista.appendChild(h('label', { class: 'row', style: { padding: '8px 10px', borderBottom: '1px solid var(--border)', alignItems: 'flex-start', cursor: 'pointer' } }, [
+          cb,
+          h('div', { style: { flex: 1, minWidth: 0 } }, [
+            h('div', { style: { fontSize: '12px' } }, [
+              h('b', {}, `Gen ${g.numero || '?'}`),
+              h('span', { class: 'mono muted', style: { marginLeft: '8px' } }, c.clave || ''),
+              proy && h('span', { class: 'tag muted', style: { marginLeft: '6px' } }, '🔮')
+            ]),
+            h('div', { class: 'desc', style: { fontSize: '12px' } }, c.descripcion || ''),
+            h('div', { class: 'muted', style: { fontSize: '11px' } },
+              `${num((g.partidas || []).length, 0)} partida(s) · ${num(calcGeneradorTotal(c, g), 2)} ${c.unidad || ''}`)
+          ])
+        ]));
+      }
+      actualizarResumen();
+    }
+    function actualizarResumen() {
+      const origen = obra.estimaciones?.[sel.value] || {};
+      resumen.innerHTML = '';
+      resumen.appendChild(h('span', {}, `${seleccion.size} generador(es) seleccionado(s).`));
+      if (origen.estado === 'cerrada') {
+        resumen.appendChild(h('div', { class: 'warn', style: { marginTop: '4px' } },
+          `⚠ La estimación #${origen.numero} está cerrada. Mover algo que SÍ contaba cambiaría sus cifras ya cerradas; lo de proyección no, porque nunca contó.`));
+      }
+    }
+    sel.addEventListener('change', pintarLista);
+    pintarLista();
+
+    const ok = await modal({
+      title: `Traer generadores a la estimación #${est.numero}`,
+      confirmLabel: 'Traer a esta estimación',
+      body: h('div', {}, [
+        h('p', { class: 'muted', style: { fontSize: '12px', marginTop: 0 } }, 'Mueve generadores completos (con sus mediciones, croquis y fotos) de otra estimación a esta. Útil cuando lo que dejaste proyectado en un periodo se terminó ejecutando en este.'),
+        h('div', { class: 'field' }, [h('label', {}, 'Traer desde'), sel]),
+        h('div', { style: { marginTop: '10px' } }, lista),
+        resumen,
+        h('label', { class: 'row', style: { marginTop: '10px', fontSize: '12px' } }, [limpiar, h('span', {}, 'Quitarles la marca de proyección (ya se ejecutaron de verdad)')]),
+        h('p', { class: 'muted', style: { fontSize: '11px', marginTop: '8px' } }, 'Ambas estimaciones se renumeran 1..N sin huecos. Los traídos se agregan al final de esta.')
+      ]),
+      onConfirm: () => { if (!seleccion.size) { toast('Selecciona al menos un generador', 'warn'); return false; } return true; }
+    });
+    if (!ok) return;
+    try {
+      const n = await moverGeneradoresAEstimacion(obraId, [...seleccion], estId, { limpiarProyeccion: limpiar.checked });
+      toast(`${n} generador(es) movido(s) a esta estimación`, 'ok');
       renderEstimacion({ params: { id: obraId, estid: estId } });
     } catch (err) { toast('Error: ' + err.message, 'danger'); }
   }
@@ -170,6 +257,11 @@ export async function renderEstimacion({ params }) {
         finally { btn.disabled = false; btn.textContent = prev; }
       }
     }, '⤓ PDF estimación'),
+    editable && h('button', {
+      class: 'btn',
+      title: 'Mover generadores completos desde otra estimación (p. ej. lo que dejaste proyectado y se ejecutó en este periodo)',
+      onClick: traerDeOtraEstimacionFlow
+    }, '⇄ Traer de otra estimación'),
     editable && h('button', { class: 'btn primary', onClick: () => pickConceptoDialog(obra, obraId, estId, conceptos) }, '+ Nuevo generador'),
     editable && h('button', { class: 'btn', onClick: () => pickConceptoSinGenDialog(obra, obraId, estId, conceptos, avances) }, '+ Avance sin generador')
   ]);

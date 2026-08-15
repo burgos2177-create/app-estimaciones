@@ -539,6 +539,52 @@ export async function moveGenerador(obraId, gid, dir) {
   return true;
 }
 
+// Traslada generadores a otra estimación. Caso típico: lo que se dejó como
+// PROYECCIÓN en el periodo pasado se ejecutó de verdad en este, así que en vez de
+// recapturar las mediciones se mueven tal cual.
+//
+// Renumera 1..N tanto la(s) estimación(es) de origen como la de destino, para que
+// ninguna quede con huecos. Los movidos se anexan al final del destino en el
+// orden en que venían. Todo va en UNA actualización (atómica): o se mueven todos
+// o ninguno, y nunca queda una numeración a medias.
+export async function moverGeneradoresAEstimacion(obraId, gids, destinoEstId, { limpiarProyeccion = true } = {}) {
+  const all = await rread(`obras/${obraId}/generadores`) || {};
+  const mover = gids.filter(id => all[id] && all[id].estimacionId !== destinoEstId);
+  if (!mover.length) return 0;
+
+  const origenes = new Set(mover.map(id => all[id].estimacionId));
+  const updates = {};
+  const now = Date.now();
+  for (const gid of mover) {
+    updates[`${gid}/estimacionId`] = destinoEstId;
+    updates[`${gid}/updatedAt`] = now;
+    if (limpiarProyeccion) updates[`${gid}/esProyeccion`] = false;
+  }
+
+  // Estado resultante en memoria, para calcular la numeración final.
+  const post = {};
+  for (const [id, g] of Object.entries(all)) {
+    post[id] = { ...g, estimacionId: mover.includes(id) ? destinoEstId : g.estimacionId };
+  }
+  const orden = (id) => [
+    mover.includes(id) ? 1 : 0,          // los movidos van al final del destino
+    Number(post[id].numero) || 0,
+    Number(post[id].createdAt) || 0
+  ];
+  for (const estId of [...origenes, destinoEstId]) {
+    const ids = Object.keys(post)
+      .filter(id => post[id].estimacionId === estId)
+      .sort((a, b) => {
+        const [ma, na, ca] = orden(a), [mb, nb, cb] = orden(b);
+        return ma - mb || na - nb || ca - cb;
+      });
+    ids.forEach((id, i) => { if ((Number(all[id].numero) || 0) !== i + 1) updates[`${id}/numero`] = i + 1; });
+  }
+
+  await update(_ref(`obras/${obraId}/generadores`), updates);
+  return mover.length;
+}
+
 // === Cross-app: vínculos obra ↔ proyecto y lectura de bitácora ===
 // Estos paths viven en /shared/* o /legacy/bitacora/* — no bajo APP_BASE_PATH.
 // Por eso usamos paths absolutos (con "/" inicial) que el _resolve respeta.
