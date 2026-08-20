@@ -454,8 +454,50 @@ export async function renderGenerador({ params }) {
     h('div', { style: { marginTop: '8px' } }, overrunBadge)
   ]);
 
+  // Saltar entre los generadores de esta estimación sin volver al listado.
+  const hermanos = Object.entries(obra.generadores || {})
+    .filter(([, g]) => g.estimacionId === estId)
+    .sort((a, b) => (a[1].numero || 0) - (b[1].numero || 0));
+  const idxActual = hermanos.findIndex(([id]) => id === gid);
+
+  // Cambiar de generador descarta lo no guardado, así que se pregunta antes.
+  async function irAGenerador(destinoGid) {
+    if (!destinoGid || destinoGid === gid) return;
+    if (work.dirty) {
+      const ok = await modal({
+        title: 'Tienes cambios sin guardar', danger: true, confirmLabel: 'Salir sin guardar',
+        body: h('div', {}, `Si cambias al otro generador se pierden los cambios de este (#${gen.numero}). Guarda primero si los quieres conservar.`)
+      });
+      if (!ok) { selGen.value = gid; return; }
+    }
+    navigate(`/obras/${obraId}/estimaciones/${estId}/generadores/${destinoGid}`);
+  }
+
+  const selGen = h('select', {
+    title: 'Cambiar de generador dentro de esta estimación',
+    style: { maxWidth: '340px' }
+  }, hermanos.map(([id, g]) => {
+    const c = getConceptoById(obra, g.conceptoId) || {};
+    const etq = `#${g.numero} · ${c.clave || 's/clave'} — ${(c.descripcion || '').slice(0, 46)}${(c.descripcion || '').length > 46 ? '…' : ''}`;
+    return h('option', { value: id }, (g.esProyeccion ? '🔮 ' : '') + etq);
+  }));
+  selGen.value = gid;
+  selGen.addEventListener('change', () => irAGenerador(selGen.value));
+
+  const navBtn = (dir, txt, title) => h('button', {
+    class: 'btn sm ghost', title,
+    disabled: dir < 0 ? idxActual <= 0 : idxActual < 0 || idxActual >= hermanos.length - 1,
+    onClick: () => irAGenerador(hermanos[idxActual + dir]?.[0])
+  }, txt);
+
   const top = h('div', { class: 'row' }, [
     h('h1', { style: { margin: 0 } }, `Generador #${gen.numero}`),
+    hermanos.length > 1 && h('div', { class: 'row', style: { gap: '4px' } }, [
+      navBtn(-1, '‹', 'Generador anterior'),
+      selGen,
+      navBtn(1, '›', 'Generador siguiente'),
+      h('span', { class: 'muted', style: { fontSize: '11px' } }, `${idxActual + 1} de ${hermanos.length}`)
+    ]),
     h('div', { class: 'muted' }, 'Estimación #' + est.numero),
     h('div', { style: { flex: 1 } }),
     dirtyTag,
