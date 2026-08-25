@@ -791,6 +791,15 @@ export async function setPagoCliente(obraId, estimId, pago) {
   await set(_ref(`obras/${obraId}/estimaciones/${estimId}/pagoCliente`), pago);
 }
 
+// Amortización de anticipo PACTADA para una estimación puntual (fracción: 0.20 =
+// 20%). Si es null/'' se borra → esa estimación vuelve a la tasa del contrato.
+// No cambia el default de la obra ni el de las demás estimaciones.
+export async function setEstimacionAmortPct(obraId, estimId, pct) {
+  const path = `obras/${obraId}/estimaciones/${estimId}/amortPct`;
+  if (pct == null || pct === '') await remove(_ref(path));
+  else await set(_ref(path), Number(pct) || 0);
+}
+
 // IVA manual (monto) de una estimación. Si es null/'' se borra → vuelve al 16%.
 export async function setEstimacionIvaMonto(obraId, estimId, ivaMonto) {
   const path = `obras/${obraId}/estimaciones/${estimId}/ivaMonto`;

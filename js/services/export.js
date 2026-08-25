@@ -432,14 +432,30 @@ export function buildResumenData(obra, estId) {
   // Tasa de amortización sobre el subtotal ejecutado. Con base 'total_c_iva' se
   // amortiza pct*(1+iva) para recuperar el anticipo calculado sobre el monto c/IVA.
   const amortRate = amortRateOnSubtotal(anticipoPct, anticipoBase, ivaPct);
-  const amortizacionEsta = subtotalEsta * amortRate;
-  const amortizacionAcum = importeAcumEjec * amortRate;
+  // Una estimación puede pactar una amortización distinta a la del contrato
+  // (est.amortPct) sin cambiar el default de la obra. Por eso el acumulado se
+  // SUMA estimación por estimación en vez de aplicar una sola tasa al total:
+  // con tasas mezcladas, tasa × total daría un número que no existe.
+  const amortPctDe = (eid) => {
+    const e = obra.estimaciones?.[eid];
+    return (e && e.amortPct != null && e.amortPct !== '') ? Number(e.amortPct) || 0 : anticipoPct;
+  };
+  const amortRateDe = (eid) => amortRateOnSubtotal(amortPctDe(eid), anticipoBase, ivaPct);
+  const amortDeEstim = (eid) => (subtotalPorEstim[eid] || 0) * amortRateDe(eid);
+  const amortManual = est.amortPct != null && est.amortPct !== '';
+  const amortPctEsta = amortPctDe(estId);
+
+  const amortizacionEsta = subtotalEsta * amortRateDe(estId);
+  // Sobre las estimaciones CON ejecución (subtotalPorEstim), no sobre todas: así
+  // sin tasas pactadas el resultado es idéntico a importeAcumEjec * amortRate.
+  const amortizacionAcum = Object.keys(subtotalPorEstim).reduce((s, eid) => s + amortDeEstim(eid), 0);
   const anticipoTotal = anticipoBase === 'total_c_iva' ? anticipoMontoCIVA : anticipoMontoBase;
   const saldoAnticipoPorAmortizar = anticipoTotal - amortizacionAcum;
-  // Si una orden de cambio movió el contrato, amortizar a la tasa original ya no
-  // recupera exactamente el anticipo: al llegar al 100% de avance queda un
-  // remanente (+ a favor de SOGRUB, − por devolver) que se salda en el finiquito.
-  const amortizacionAl100 = subtotalContrato * amortRate;
+  // Si una orden de cambio movió el contrato, o si alguna estimación amortizó a
+  // una tasa distinta, al llegar al 100% de avance queda un remanente (+ a favor
+  // de SOGRUB, − por devolver) que se salda en el finiquito. Lo ya amortizado va
+  // tal cual; lo que falta por ejecutar se proyecta a la tasa del contrato.
+  const amortizacionAl100 = amortizacionAcum + Math.max(0, subtotalContrato - importeAcumEjec) * amortRate;
   const remanenteFiniquito = anticipoTotal - amortizacionAl100;
   const netoEsta = importeEstaBruto - amortizacionEsta;
   const netoAcum = importeAcumEjecCIVA - amortizacionAcum;
@@ -495,7 +511,7 @@ export function buildResumenData(obra, estId) {
     .map(([id]) => id);
   const subtotalAcumHasta = idsHastaEsta.reduce((s, eid) => s + (subtotalPorEstim[eid] || 0), 0);
   const ivaAcumHasta = idsHastaEsta.reduce((s, eid) => s + ivaDeEstim(eid), 0);
-  const amortizacionAcumHasta = subtotalAcumHasta * amortRate;
+  const amortizacionAcumHasta = idsHastaEsta.reduce((s, eid) => s + amortDeEstim(eid), 0);
   const netoAcumHasta = (subtotalAcumHasta + ivaAcumHasta) - amortizacionAcumHasta;
   let pagosPrevios = 0;
   for (const e of estims) {
@@ -509,7 +525,7 @@ export function buildResumenData(obra, estId) {
     avPond, importeAcumEjec, importeAcumEjecCIVA,
     anticipoMontoBase, anticipoMontoCIVA, anticipoTotal,
     amortizacionEsta, amortizacionAcum, saldoAnticipoPorAmortizar,
-    anticipoCongelado, remanenteFiniquito,
+    anticipoCongelado, remanenteFiniquito, amortPctEsta, amortManual,
     netoEsta, netoAcum,
     pagoCliente: est.pagoCliente || null,
     diferencia: netoAcum - abonosCliente,
@@ -738,7 +754,7 @@ function applyPrintFilter(rows, cfg) {
 export function exportResumenXlsx(obra, estId, cfg = {}) {
   cfg = { ...DEFAULT_PRINT_CFG, ...cfg };
   const data = buildResumenData(obra, estId);
-  const { m, est, ivaPct, anticipoPct, subtotalEsta, ivaEsta, importeEsta, avPond, diferencia, diferenciaPct, importeAcumEjec, importeAcumEjecCIVA, subtotalPagado, ivaPagado, importePagado, subtotalAbono, abonosCliente, ivaAcum, anticipoMontoBase, anticipoTotal, amortizacionEsta, amortizacionAcum, saldoAnticipoPorAmortizar, netoEsta, netoAcum, anticipoRecibido, totalRecibidoCliente, saldoCaja, subtotalRecibidoCaja, ivaRecibidoCaja, saldoSubtotalCaja, ivaEjecCaja, saldoIvaCaja } = data;
+  const { m, est, ivaPct, anticipoPct, subtotalEsta, ivaEsta, importeEsta, avPond, diferencia, diferenciaPct, importeAcumEjec, importeAcumEjecCIVA, subtotalPagado, ivaPagado, importePagado, subtotalAbono, abonosCliente, ivaAcum, anticipoMontoBase, anticipoTotal, amortizacionEsta, amortizacionAcum, saldoAnticipoPorAmortizar, amortPctEsta, amortManual, netoEsta, netoAcum, anticipoRecibido, totalRecibidoCliente, saldoCaja, subtotalRecibidoCaja, ivaRecibidoCaja, saldoSubtotalCaja, ivaEjecCaja, saldoIvaCaja } = data;
   const rows = applyPrintFilter(data.rows, cfg);
   const titulo = cfg.modo === 'estadoCuenta' ? 'ESTADO DE CUENTA' : 'RESUMEN DE ESTIMACIÓN';
 
@@ -792,7 +808,7 @@ export function exportResumenXlsx(obra, estId, cfg = {}) {
     aoa.push(['Estimación #' + est.numero + ' (esta)', subtotalEsta, ivaEsta, importeEsta]);
     aoa.push(['Acumulado ejecutado (todas)', importeAcumEjec, ivaAcum, importeAcumEjecCIVA]);
     if (cfg.mostrarAmortizacion && anticipoPct > 0) {
-      aoa.push([`Amortización anticipo (esta) — ${(anticipoPct * 100).toFixed(2)}%`, '', '', -amortizacionEsta]);
+      aoa.push([`Amortización anticipo (esta) — ${(amortPctEsta * 100).toFixed(2)}%${amortManual ? ' (pactada)' : ''}`, '', '', -amortizacionEsta]);
       aoa.push(['Amortización anticipo (acumulada)', '', '', -amortizacionAcum]);
       aoa.push(['Neto a cobrar (esta)', '', '', netoEsta]);
       aoa.push(['Neto a cobrar (acumulado)', '', '', netoAcum]);
@@ -857,7 +873,7 @@ export function exportResumenXlsx(obra, estId, cfg = {}) {
 export async function exportResumenPdf(obra, estId, cfg = {}) {
   cfg = { ...DEFAULT_PRINT_CFG, ...cfg };
   const data = buildResumenData(obra, estId);
-  const { m, est, ivaPct, anticipoPct, subtotalEsta, ivaEsta, importeEsta, avPond, diferencia, diferenciaPct, importeAcumEjec, importeAcumEjecCIVA, subtotalPagado, ivaPagado, importePagado, subtotalAbono, abonosCliente, ivaAcum, anticipoMontoBase, anticipoTotal, amortizacionEsta, amortizacionAcum, saldoAnticipoPorAmortizar, netoEsta, netoAcum, anticipoRecibido, totalRecibidoCliente, saldoCaja, subtotalRecibidoCaja, ivaRecibidoCaja, saldoSubtotalCaja, ivaEjecCaja, saldoIvaCaja } = data;
+  const { m, est, ivaPct, anticipoPct, subtotalEsta, ivaEsta, importeEsta, avPond, diferencia, diferenciaPct, importeAcumEjec, importeAcumEjecCIVA, subtotalPagado, ivaPagado, importePagado, subtotalAbono, abonosCliente, ivaAcum, anticipoMontoBase, anticipoTotal, amortizacionEsta, amortizacionAcum, saldoAnticipoPorAmortizar, amortPctEsta, amortManual, netoEsta, netoAcum, anticipoRecibido, totalRecibidoCliente, saldoCaja, subtotalRecibidoCaja, ivaRecibidoCaja, saldoSubtotalCaja, ivaEjecCaja, saldoIvaCaja } = data;
   const rows = applyPrintFilter(data.rows, cfg);
   const isEstadoCuenta = cfg.modo === 'estadoCuenta';
 
@@ -936,7 +952,7 @@ export async function exportResumenPdf(obra, estId, cfg = {}) {
       ['Acumulado ejecutado (todas)', money(importeAcumEjec), money(ivaAcum), money(importeAcumEjecCIVA)]
     ];
     if (cfg.mostrarAmortizacion && anticipoPct > 0) {
-      ecBody.push([`Amortización anticipo esta (${(anticipoPct * 100).toFixed(2)}%)`, '—', '—', { content: '-' + money(amortizacionEsta), styles: { textColor: [180, 70, 60] } }]);
+      ecBody.push([`Amortización anticipo esta (${(amortPctEsta * 100).toFixed(2)}%)`, '—', '—', { content: '-' + money(amortizacionEsta), styles: { textColor: [180, 70, 60] } }]);
       ecBody.push(['Amortización anticipo acumulada', '—', '—', { content: '-' + money(amortizacionAcum), styles: { textColor: [180, 70, 60] } }]);
       ecBody.push([{ content: 'Neto a cobrar (esta)', styles: { fontStyle: 'bold' } }, '—', '—', { content: money(netoEsta), styles: { fontStyle: 'bold' } }]);
       ecBody.push([{ content: 'Neto a cobrar (acumulado)', styles: { fontStyle: 'bold' } }, '—', '—', { content: money(netoAcum), styles: { fontStyle: 'bold' } }]);

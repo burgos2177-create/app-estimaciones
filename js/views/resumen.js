@@ -4,7 +4,7 @@
 
 import { h, modal, toast, buzonBadge } from '../util/dom.js';
 import { renderShell } from './shell.js';
-import { rread, loadObra, setPagoCliente, setEstimacionIvaMonto, updateObraMeta, getObraLinks, listBuzonItems, pushBuzonItem, updateBuzonItem, setAvanceObra, setAnticipoOtorgado, getContratoVigente } from '../services/db.js';
+import { rread, loadObra, setPagoCliente, setEstimacionIvaMonto, updateObraMeta, getObraLinks, listBuzonItems, pushBuzonItem, updateBuzonItem, setAvanceObra, setAnticipoOtorgado, getContratoVigente, setEstimacionAmortPct } from '../services/db.js';
 import { state } from '../state/store.js';
 import { money, num, dateMx, pct } from '../util/format.js';
 import { buildResumenData, exportResumenPdf, exportResumenXlsx, exportEstimacionJson, computeAvanceObra } from '../services/export.js';
@@ -53,7 +53,7 @@ async function draw(obraId, obra, estId) {
   const ests = obra.estimaciones || {};
   const estsArr = Object.entries(ests).map(([id, e]) => ({ id, ...e })).sort((a, b) => (a.numero || 0) - (b.numero || 0));
   const data = buildResumenData(obra, estId);
-  const { est, ivaPct, anticipoPct, rows, subtotalEsta, ivaEsta, ivaAcum, ivaManual, importeEsta, avPond, importeAcumEjec, importeAcumEjecCIVA, subtotalPagado, ivaPagado, importePagado, diferencia, diferenciaPct, anticipoMontoBase, amortizacionEsta, amortizacionAcum, saldoAnticipoPorAmortizar, remanenteFiniquito, netoEsta, netoAcum, anticipoRecibido, totalRecibidoCliente, saldoCaja, excesoAnticipo, abonosCliente, subtotalAbono, sugeridoPagoJusto, amortizacionAcumHasta, netoAcumHasta, pagosPrevios, subtotalRecibidoCaja, ivaRecibidoCaja, saldoSubtotalCaja, ivaEjecCaja, saldoIvaCaja } = data;
+  const { est, ivaPct, anticipoPct, rows, subtotalEsta, ivaEsta, ivaAcum, ivaManual, importeEsta, avPond, importeAcumEjec, importeAcumEjecCIVA, subtotalPagado, ivaPagado, importePagado, diferencia, diferenciaPct, anticipoMontoBase, amortizacionEsta, amortizacionAcum, saldoAnticipoPorAmortizar, remanenteFiniquito, amortPctEsta, amortManual, netoEsta, netoAcum, anticipoRecibido, totalRecibidoCliente, saldoCaja, excesoAnticipo, abonosCliente, subtotalAbono, sugeridoPagoJusto, amortizacionAcumHasta, netoAcumHasta, pagosPrevios, subtotalRecibidoCaja, ivaRecibidoCaja, saldoSubtotalCaja, ivaEjecCaja, saldoIvaCaja } = data;
 
   // Publica el avance + historial a /shared para bitácora. Usa computeAvanceObra
   // (misma fuente que las demás vistas) para NO borrar el historial al reescribir
@@ -133,7 +133,10 @@ async function draw(obraId, obra, estId) {
   ];
   if (anticipoPct > 0) {
     ecBodyRows.push(h('tr', { style: { color: 'var(--warn)' } }, [
-      h('td', {}, `Amortización anticipo (esta)`),
+      h('td', {}, [
+        `Amortización anticipo (esta) · ${pct(amortPctEsta)}`,
+        amortManual && h('span', { class: 'tag ok', style: { marginLeft: '6px', fontSize: '10px' }, title: `Pactada para esta estimación; el contrato sigue en ${pct(anticipoPct)}` }, 'pactada')
+      ]),
       h('td', { class: 'num' }, '—'),
       h('td', { class: 'num' }, '—'),
       h('td', { class: 'num' }, '-' + money(amortizacionEsta))
@@ -166,6 +169,9 @@ async function draw(obraId, obra, estId) {
   const editIvaBtn = editable
     ? h('button', { class: 'btn sm ghost', onClick: async () => { const ok = await editIvaDialog(obraId, estId, est); if (ok) renderResumen({ params: { id: obraId } }); } }, '✎ IVA')
     : null;
+  const editAmortBtn = editable
+    ? h('button', { class: 'btn sm ghost', onClick: async () => { const ok = await editAmortDialog(obraId, estId, est, anticipoPct, subtotalEsta); if (ok) renderResumen({ params: { id: obraId } }); } }, '✎ Amortización')
+    : null;
   // Trazabilidad del IVA: si ESTA estimación quedó en 16% auto pero OTRA se capturó
   // manual, avisa (fácil olvidar ajustarla y descuadrar el IVA acumulado).
   const otrasManual = Object.entries(ests).filter(([id, e]) => id !== estId && e.ivaMonto != null && e.ivaMonto !== '').map(([, e]) => e.numero);
@@ -180,7 +186,11 @@ async function draw(obraId, obra, estId) {
       ivaManual
         ? h('span', { class: 'tag ok', title: 'El IVA de esta estimación se capturó como monto manual (no 16% sobre todo)' }, `IVA manual: ${money(ivaEsta)}`)
         : h('span', { class: 'tag muted', title: 'IVA automático (16% del subtotal). Edítalo para poner solo el IVA de materiales gravados.' }, `IVA 16% auto`),
-      editIvaBtn
+      editIvaBtn,
+      anticipoPct > 0 && (amortManual
+        ? h('span', { class: 'tag ok', style: { marginLeft: '10px' }, title: `Esta estimación amortiza al ${pct(amortPctEsta)} en vez del ${pct(anticipoPct)} del contrato. No afecta a las demás.` }, `Amortización pactada: ${pct(amortPctEsta)}`)
+        : h('span', { class: 'tag muted', style: { marginLeft: '10px' }, title: 'Amortiza a la tasa del contrato. Edítala si en este periodo se pactó otra.' }, `Amortización ${pct(anticipoPct)}`)),
+      anticipoPct > 0 && editAmortBtn
     ]),
     h('table', { class: 'tbl' }, [
       h('thead', {}, [h('tr', {}, [h('th', {}, 'Documento'), h('th', { class: 'num' }, 'Subtotal'), h('th', { class: 'num' }, 'IVA'), h('th', { class: 'num' }, 'Importe')])]),
@@ -307,6 +317,61 @@ function kvBig(label, val, kind) {
     h('label', {}, label),
     h('div', { class: 'mono', style: { fontSize: '20px', fontWeight: 600, color } }, val)
   ]);
+}
+
+// Amortización de anticipo pactada para ESTA estimación. Vacío = la del contrato.
+// Se guarda el porcentaje (no el monto) porque así sigue al subtotal si después
+// se ajustan generadores. Afecta solo a esta estimación; el default no se mueve.
+async function editAmortDialog(obraId, estId, est, anticipoPct, subtotalEsta) {
+  const actual = (est.amortPct != null && est.amortPct !== '') ? Number(est.amortPct) : null;
+  const rAuto = h('input', { type: 'radio', name: 'amort' });
+  const rManual = h('input', { type: 'radio', name: 'amort' });
+  const pctIn = h('input', {
+    type: 'number', step: '0.01', min: '0', max: '100',
+    value: actual != null ? (actual * 100).toFixed(2) : (anticipoPct * 100).toFixed(2),
+    disabled: actual == null
+  });
+  rAuto.checked = actual == null; rManual.checked = actual != null;
+
+  const preview = h('div', { style: { fontSize: '12px', marginTop: '10px', paddingTop: '10px', borderTop: '1px solid var(--border)' } });
+  function refresh() {
+    pctIn.disabled = !rManual.checked;
+    const p = rManual.checked ? (Number(pctIn.value) || 0) / 100 : anticipoPct;
+    preview.innerHTML = '';
+    preview.appendChild(h('div', {}, [
+      'Sobre el subtotal de esta estimación (', h('b', { class: 'mono' }, money(subtotalEsta)), ') se amortizarían ',
+      h('b', { class: 'mono warn' }, money(subtotalEsta * p)), '.'
+    ]));
+    preview.appendChild(h('div', { class: 'muted', style: { marginTop: '4px' } }, [
+      'Neto a cobrar de esta estimación (sin IVA): ', h('b', { class: 'mono' }, money(subtotalEsta * (1 - p)))
+    ]));
+  }
+  [rAuto, rManual].forEach(r => r.addEventListener('change', refresh));
+  pctIn.addEventListener('input', refresh);
+  refresh();
+
+  return await modal({
+    title: 'Amortización de anticipo de esta estimación',
+    body: h('div', {}, [
+      h('p', { class: 'muted', style: { fontSize: '12px', marginTop: 0 } }, 'Si en este periodo se pactó amortizar distinto, cámbialo aquí. Solo aplica a esta estimación: el contrato y las demás siguen igual, y el acumulado suma la amortización real de cada una.'),
+      h('label', { class: 'row' }, [rAuto, h('span', {}, `Tasa del contrato (${pct(anticipoPct)})`)]),
+      h('label', { class: 'row', style: { marginTop: '6px' } }, [rManual, h('span', {}, 'Amortización pactada para esta estimación')]),
+      h('div', { class: 'field', style: { marginTop: '8px' } }, [h('label', {}, 'Porcentaje (%)'), pctIn]),
+      preview
+    ]),
+    confirmLabel: 'Guardar',
+    onConfirm: async () => {
+      if (rManual.checked) {
+        const v = Number(pctIn.value);
+        if (isNaN(v) || v < 0 || v > 100) { toast('Captura un porcentaje entre 0 y 100', 'warn'); return false; }
+      }
+      try {
+        await setEstimacionAmortPct(obraId, estId, rManual.checked ? (Number(pctIn.value) || 0) / 100 : null);
+        toast('Amortización actualizada', 'ok');
+        return true;
+      } catch (err) { toast('Error: ' + err.message, 'danger'); return false; }
+    }
+  });
 }
 
 // IVA manual (monto) de una estimación. Vacío/automático = 16% del subtotal.
