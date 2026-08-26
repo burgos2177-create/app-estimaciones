@@ -4,7 +4,7 @@
 import { h, modal, toast, buzonBadge } from '../util/dom.js';
 import { renderShell } from './shell.js';
 import { rread, loadObra, buildConceptosLookup, setSubEstimacionAvance, setSubEstimacionConIva, setPagoSub,
-         cerrarSubEstimacion, reabrirSubEstimacion,
+         cerrarSubEstimacion, reabrirSubEstimacion, setSubEstimacionRetenciones,
          getObraLinks, listBuzonItems, pushBuzonItem, updateBuzonItem } from '../services/db.js';
 import { state } from '../state/store.js';
 import { navigate, dispatch } from '../state/router.js';
@@ -75,6 +75,31 @@ export async function renderSubEstimacion({ params }) {
     importeLabelNode.textContent = estConIva ? 'Importe (c/IVA)' : 'Importe (neto)';
   }
 
+  // Retenciones (fondo de garantía / vicios ocultos). Se descuentan del pago de
+  // ESTA estimación y se liberan después. Las de modo 'pct' se recalculan contra
+  // el subtotal vivo; las 'fijo' se quedan en el monto capturado.
+  // RTDB puede devolver el array como objeto si hubo huecos; normalizamos.
+  let retenciones = Array.isArray(est.retenciones)
+    ? est.retenciones.filter(Boolean).map(r => ({ ...r }))
+    : (est.retenciones && typeof est.retenciones === 'object' ? Object.values(est.retenciones).filter(Boolean).map(r => ({ ...r })) : []);
+  // Agregar/quitar retenciones solo mientras la estimación es borrador. LIBERAR
+  // sí se permite después de cerrarla: la liberación ocurre meses más tarde,
+  // cuando ya se cerró y hasta se pagó la estimación.
+  const editableRet = editable || state.user?.role === 'admin';
+  const retencionesCard = h('div', {});
+  const summaryNeto = h('span', { class: 'mono', style: { fontSize: '20px', fontWeight: 700, color: 'var(--accent)' } }, '$0.00');
+  const netoWrap = h('div', { class: 'field hidden', style: { marginTop: '10px' } }, [
+    h('label', {}, 'Neto a entregarle al sub (importe − retenciones)'),
+    summaryNeto
+  ]);
+
+  function montoRetencion(r, subtotal) {
+    return r.modo === 'pct' ? subtotal * (Number(r.pct) || 0) : (Number(r.monto) || 0);
+  }
+  function totalRetenido(subtotal) {
+    return retenciones.reduce((s, r) => s + montoRetencion(r, subtotal), 0);
+  }
+
   // Tabla editable
   const totalsRow = h('tr', { style: { fontWeight: 600, background: 'var(--bg-2)' } });
   function recompute() {
@@ -96,6 +121,53 @@ export async function renderSubEstimacion({ params }) {
     summarySub.textContent = money(subtotal);
     summaryIva.textContent = money(iva);
     summaryImp.textContent = money(importe);
+    summaryNeto.textContent = money(importe - totalRetenido(subtotal));
+    netoWrap.classList.toggle('hidden', retenciones.length === 0);
+    renderRetenciones(subtotal);
+  }
+
+  function subtotalActual() {
+    let s = 0;
+    for (const cs of conceptosSub) {
+      s += (Number(localAvances[cs.conceptoId]) || 0) * (Number(ganador.precios?.[cs.conceptoId]) || 0);
+    }
+    return s;
+  }
+
+  function renderRetenciones(subtotal) {
+    retencionesCard.innerHTML = '';
+    const filas = retenciones.map((r, i) => {
+      const monto = montoRetencion(r, subtotal);
+      const liberada = !!r.liberadaAt;
+      return h('div', { class: 'row', style: { padding: '6px 0', borderTop: i ? '1px solid var(--border)' : 'none', fontSize: '12px' } }, [
+        h('div', { style: { flex: 1, minWidth: 0 } }, [
+          h('div', {}, [
+            h('b', {}, r.etiqueta || 'Retención'),
+            r.modo === 'pct' && h('span', { class: 'muted', style: { marginLeft: '6px' } }, `${pct(Number(r.pct) || 0)} del subtotal`),
+            liberada && h('span', { class: 'tag ok', style: { marginLeft: '6px' } }, `✓ liberada ${dateMx(r.liberadaAt)}`)
+          ])
+        ]),
+        h('span', { class: 'mono', style: { color: liberada ? 'var(--ok)' : 'var(--warn)' } }, '−' + money(monto)),
+        !liberada && h('button', {
+          class: 'btn sm ghost', style: { marginLeft: '8px' },
+          title: 'Registrar la liberación de esta retención y enviarla al contador',
+          onClick: () => liberarRetencionDialog(i)
+        }, '💸 Liberar'),
+        !liberada && editableRet && h('button', {
+          class: 'btn sm danger ghost', title: 'Quitar la retención',
+          onClick: async () => { retenciones.splice(i, 1); await guardarRetenciones(); }
+        }, '✕')
+      ]);
+    });
+    const subtotalRet = totalRetenido(subtotal);
+    retencionesCard.appendChild(h('div', { class: 'row', style: { marginBottom: '6px' } }, [
+      h('span', { class: 'muted', style: { fontSize: '12px' } }, 'Retenciones (se descuentan del pago y se liberan después)'),
+      h('div', { style: { flex: 1 } }),
+      subtotalRet > 0 && h('span', { class: 'mono warn', style: { fontSize: '12px' } }, 'Total −' + money(subtotalRet)),
+      editableRet && h('button', { class: 'btn sm', style: { marginLeft: '8px' }, onClick: agregarRetencionDialog }, '+ Retención')
+    ]));
+    if (filas.length) retencionesCard.appendChild(h('div', {}, filas));
+    else retencionesCard.appendChild(h('div', { class: 'muted', style: { fontSize: '11px' } }, 'Sin retenciones. Agrega un fondo de garantía si vas a retener parte del pago.'));
   }
 
   const tbody = h('tbody', {}, conceptosSub.map(cs => {
@@ -221,6 +293,8 @@ export async function renderSubEstimacion({ params }) {
       h('div', { class: 'field' }, [ivaLabelNode, h('div', {}, summaryIva)]),
       h('div', { class: 'field' }, [importeLabelNode, h('div', {}, summaryImp)])
     ]),
+    h('div', { style: { marginTop: '14px', paddingTop: '12px', borderTop: '1px solid var(--border)' } }, retencionesCard),
+    netoWrap,
     h('div', { class: 'row', style: { marginTop: '14px', paddingTop: '12px', borderTop: '1px solid var(--border)' } }, [
       h('div', {}, [
         h('span', { class: 'muted' }, 'Pago al sub: '),
@@ -244,6 +318,106 @@ export async function renderSubEstimacion({ params }) {
   renderShell(crumbs(obraId, m.nombre, subId, subNombre, eid, est.numero), h('div', {}, [
     head, summary, h('div', { class: 'card', style: { padding: 0, overflow: 'auto' } }, table)
   ]));
+
+  async function guardarRetenciones() {
+    try {
+      await setSubEstimacionRetenciones(obraId, subId, eid, retenciones);
+      est.retenciones = retenciones;
+      recompute();
+    } catch (err) { toast('Error: ' + err.message, 'danger'); }
+  }
+
+  async function agregarRetencionDialog() {
+    const etq = h('input', { value: 'Fondo de garantía (vicios ocultos)' });
+    const rPct = h('input', { type: 'radio', name: 'ret-modo', checked: true });
+    const rFijo = h('input', { type: 'radio', name: 'ret-modo' });
+    const pctIn = h('input', { type: 'number', step: '0.01', min: '0', max: '100', value: '5' });
+    const montoIn = h('input', { type: 'number', step: '0.01', value: '', disabled: true });
+    const prev = h('div', { style: { fontSize: '12px', marginTop: '10px', paddingTop: '10px', borderTop: '1px solid var(--border)' } });
+    const sub = subtotalActual();
+    const iva = estConIva ? sub * ivaPct : 0;
+    function refresh() {
+      pctIn.disabled = !rPct.checked; montoIn.disabled = !rFijo.checked;
+      const monto = rPct.checked ? sub * ((Number(pctIn.value) || 0) / 100) : (Number(montoIn.value) || 0);
+      const yaRetenido = totalRetenido(sub);
+      prev.innerHTML = '';
+      prev.appendChild(h('div', {}, ['Se retendrían ', h('b', { class: 'mono warn' }, money(monto)), ' del subtotal de ', h('b', { class: 'mono' }, money(sub)), '.']));
+      prev.appendChild(h('div', { class: 'muted', style: { marginTop: '4px' } }, [
+        'Neto a pagarle al sub: ', h('b', { class: 'mono' }, money(sub + iva - yaRetenido - monto))
+      ]));
+    }
+    [rPct, rFijo].forEach(r => r.addEventListener('change', refresh));
+    pctIn.addEventListener('input', refresh); montoIn.addEventListener('input', refresh);
+    refresh();
+
+    const ok = await modal({
+      title: 'Agregar retención',
+      body: h('div', {}, [
+        h('p', { class: 'muted', style: { fontSize: '12px', marginTop: 0 } }, 'Se descuenta del pago de esta estimación y queda pendiente de liberar. Al registrar el pago, el buzón recibe el gasto por el neto y la retención por separado, para que el contador la lleve como fondo pendiente.'),
+        h('div', { class: 'field' }, [h('label', {}, 'Concepto de la retención'), etq]),
+        h('div', { style: { marginTop: '10px' } }, [
+          h('label', { class: 'row' }, [rPct, h('span', {}, '% del subtotal')]),
+          h('div', { class: 'field', style: { marginTop: '6px' } }, [h('label', {}, 'Porcentaje (%)'), pctIn]),
+          h('label', { class: 'row', style: { marginTop: '8px' } }, [rFijo, h('span', {}, 'Monto fijo')]),
+          h('div', { class: 'field', style: { marginTop: '6px' } }, [h('label', {}, 'Monto'), montoIn])
+        ]),
+        prev
+      ]),
+      confirmLabel: 'Agregar',
+      onConfirm: () => {
+        if (!etq.value.trim()) { toast('Ponle un concepto a la retención', 'warn'); return false; }
+        const monto = rPct.checked ? sub * ((Number(pctIn.value) || 0) / 100) : (Number(montoIn.value) || 0);
+        if (!(monto > 0)) { toast('La retención debe ser mayor a cero', 'warn'); return false; }
+        return true;
+      }
+    });
+    if (!ok) return;
+    retenciones.push(rPct.checked
+      ? { etiqueta: etq.value.trim(), modo: 'pct', pct: (Number(pctIn.value) || 0) / 100, creadaAt: Date.now() }
+      : { etiqueta: etq.value.trim(), modo: 'fijo', monto: Number(montoIn.value) || 0, creadaAt: Date.now() });
+    await guardarRetenciones();
+  }
+
+  // Liberar = el dinero retenido sale ahora. Se marca en la retención y se manda
+  // al buzón como movimiento aparte, para que el contador registre ESE gasto.
+  async function liberarRetencionDialog(idx) {
+    const r = retenciones[idx];
+    if (!r) return;
+    const sub = subtotalActual();
+    const monto = montoRetencion(r, sub);
+    const montoIn = h('input', { type: 'number', step: '0.01', value: monto.toFixed(2) });
+    const fechaIn = h('input', { type: 'date', value: new Date().toISOString().slice(0, 10) });
+    const ok = await modal({
+      title: 'Liberar retención',
+      body: h('div', {}, [
+        h('p', { class: 'muted', style: { fontSize: '12px', marginTop: 0 } }, [
+          'Se le libera a ', h('b', {}, ganador.nombre), ' la retención "', h('b', {}, r.etiqueta || 'Retención'), '" de la estimación #', String(est.numero), '. Se enviará al buzón como gasto, porque este sí es dinero que sale ahora.'
+        ]),
+        h('div', { class: 'grid-2' }, [
+          h('div', { class: 'field' }, [h('label', {}, 'Monto a liberar'), montoIn]),
+          h('div', { class: 'field' }, [h('label', {}, 'Fecha'), fechaIn])
+        ]),
+        montoIn.value !== monto.toFixed(2) ? null : h('p', { class: 'muted', style: { fontSize: '11px', marginTop: '8px' } }, `Retenido originalmente: ${money(monto)}. Si liberas menos, la diferencia queda como descuento definitivo.`)
+      ]),
+      confirmLabel: 'Liberar y enviar al contador',
+      onConfirm: () => {
+        const v = Number(montoIn.value);
+        if (!(v > 0)) { toast('Captura el monto a liberar', 'warn'); return false; }
+        return true;
+      }
+    });
+    if (!ok) return;
+    const liberadaMonto = Number(montoIn.value) || 0;
+    const liberadaAt = fechaIn.value ? new Date(fechaIn.value).getTime() : Date.now();
+    try {
+      retenciones[idx] = { ...r, liberadaAt, liberadaMonto, montoRetenido: monto };
+      await setSubEstimacionRetenciones(obraId, subId, eid, retenciones);
+      await enviarRetencionAlBuzon(obraId, subId, eid, sub, est, ganador, retenciones[idx], idx, 'liberacion');
+      est.retenciones = retenciones;
+      toast('Retención liberada y enviada al buzón', 'ok');
+      recompute();
+    } catch (err) { toast('Error: ' + err.message, 'danger'); }
+  }
 
   async function cerrarConfirm() {
     await modal({
@@ -377,7 +551,40 @@ export async function renderSubEstimacion({ params }) {
         importeIn.value = subtotalCalc.toFixed(2);
       }
     });
+    // Las retenciones se descuentan del importe capturado (que es el BRUTO de la
+    // estimación). Se muestra el neto para que quede claro qué se le entrega.
+    const retencionPreview = h('div', { style: { marginTop: '12px', paddingTop: '10px', borderTop: '1px solid var(--border)', fontSize: '12px' } });
+    function refreshRetencionPreview() {
+      const pendientes = retenciones.filter(r => !r.liberadaAt);
+      retencionPreview.innerHTML = '';
+      if (!pendientes.length) return;
+      const subCalc = subtotalActual();
+      const bruto = conIva ? (Number(importeIn.value) || 0) : (Number(subtotalIn.value) || 0);
+      const totalRet = pendientes.reduce((s, r) => s + montoRetencion(r, subCalc), 0);
+      retencionPreview.appendChild(h('div', { class: 'muted', style: { marginBottom: '4px' } }, 'Retenciones de esta estimación:'));
+      for (const r of pendientes) {
+        retencionPreview.appendChild(h('div', { class: 'row' }, [
+          h('span', {}, r.etiqueta || 'Retención'),
+          h('div', { style: { flex: 1 } }),
+          h('span', { class: 'mono warn' }, '−' + money(montoRetencion(r, subCalc)))
+        ]));
+      }
+      retencionPreview.appendChild(h('div', { class: 'row', style: { marginTop: '6px', paddingTop: '6px', borderTop: '1px solid var(--border)', fontWeight: 600 } }, [
+        h('span', {}, 'Neto que se le entrega'),
+        h('div', { style: { flex: 1 } }),
+        h('span', { class: 'mono', style: { color: 'var(--accent)' } }, money(bruto - totalRet))
+      ]));
+      retencionPreview.appendChild(h('div', { class: 'muted', style: { fontSize: '11px', marginTop: '6px' } },
+        'El importe de arriba es el bruto de la estimación. Al contador le llega el gasto por el neto, y la retención por separado como fondo pendiente de liberar.'));
+    }
+    subtotalIn.addEventListener('input', refreshRetencionPreview);
+    importeIn.addEventListener('input', refreshRetencionPreview);
+    trasladarBtn.addEventListener('click', refreshRetencionPreview);
+    radioConIva.addEventListener('change', refreshRetencionPreview);
+    radioSinIva.addEventListener('change', refreshRetencionPreview);
+
     aplicarModoIva();   // estado inicial
+    refreshRetencionPreview();
 
     await modal({
       title: 'Pago al subcontratista',
@@ -405,7 +612,8 @@ export async function renderSubEstimacion({ params }) {
         h('div', { class: 'grid-2', style: { marginTop: '10px' } }, [
           h('div', { class: 'field' }, [importeLabel, importeIn]),
           h('div', { class: 'field' }, [h('label', {}, 'Fecha'), fechaIn])
-        ])
+        ]),
+        retencionPreview
       ]),
       confirmLabel: 'Guardar y enviar al contador',
       onConfirm: async () => {
@@ -441,9 +649,30 @@ export async function renderSubEstimacion({ params }) {
             importe: Number((d.importeRaw * factor).toFixed(2))
           }));
 
+          // Las retenciones se descuentan del pago: el gasto que ve el contador
+          // es el NETO que salió de caja, y cada retención va aparte al buzón
+          // como fondo pendiente (no es gasto hasta que se libere).
+          const subCalc = subtotalActual();
+          const retenidas = retenciones.filter(r => !r.liberadaAt).map((r, i) => ({
+            idx: i, etiqueta: r.etiqueta || 'Retención', modo: r.modo || 'fijo',
+            pct: r.modo === 'pct' ? (Number(r.pct) || 0) : null,
+            monto: Math.round(montoRetencion(r, subCalc) * 100) / 100
+          }));
+          const retencionTotal = retenidas.reduce((s, r) => s + r.monto, 0);
+          pago.importeBruto = Math.round(importe * 100) / 100;
+          pago.retencionTotal = Math.round(retencionTotal * 100) / 100;
+          pago.retenciones = retenidas;
+          pago.importe = Math.round((importe - retencionTotal) * 100) / 100;
+
           await setPagoSub(obraId, subId, eid, pago);
           await sincronizarPagoSubConBuzon(obraId, subId, eid, sub, est, ganador, pago, desglose);
-          toast('Pago guardado y enviado al buzón del contador', 'ok');
+          for (const r of retenciones) {
+            if (r.liberadaAt) continue;
+            await enviarRetencionAlBuzon(obraId, subId, eid, subCalc, est, ganador, r, retenciones.indexOf(r), 'retencion');
+          }
+          toast(retencionTotal > 0
+            ? 'Pago neto y retención enviados al buzón del contador'
+            : 'Pago guardado y enviado al buzón del contador', 'ok');
           dispatch();
           return true;
         } catch (err) {
@@ -454,6 +683,59 @@ export async function renderSubEstimacion({ params }) {
       }
     });
   }
+}
+
+// Manda una retención al buzón como movimiento APARTE del pago.
+//   movimiento 'retencion'   → informativo: el dinero NO salió, queda como fondo
+//                              pendiente de liberar (no es gasto todavía).
+//   movimiento 'liberacion'  → ahora sí sale el dinero: es gasto.
+// Van con `refKey` para que el contador pueda parear la liberación con su
+// retención original y no las cuente dos veces.
+async function enviarRetencionAlBuzon(obraId, subId, eid, subtotalEst, est, ganador, ret, idx, movimiento) {
+  const [links, obraMeta, sub] = await Promise.all([
+    getObraLinks(),
+    rread(`obras/${obraId}/meta`),
+    rread(`obras/${obraId}/subcontratos/${subId}/meta`)
+  ]);
+  const proyectoId = links?.[obraId] || null;
+  const subNombre = sub?.nombre || '';
+  const proveedorNombre = ganador?.nombre || '';
+  const refKey = `${obraId}:${subId}:${eid}:ret${idx}`;
+  const esLiberacion = movimiento === 'liberacion';
+  const monto = esLiberacion
+    ? (Number(ret.liberadaMonto) || 0)
+    : (ret.modo === 'pct' ? subtotalEst * (Number(ret.pct) || 0) : (Number(ret.monto) || 0));
+
+  const items = await listBuzonItems();
+  const existing = Object.entries(items).find(([, it]) =>
+    it?.tipo === 'retencion_subcontratista' && it?.refKey === refKey && it?.movimiento === movimiento &&
+    (it?.estado === 'pendiente' || it?.estado === 'huerfano')
+  );
+
+  const payload = {
+    tipo: 'retencion_subcontratista',
+    movimiento,                        // 'retencion' | 'liberacion'
+    esGasto: esLiberacion,             // solo la liberación mueve efectivo
+    origenApp: 'estimaciones',
+    obraId, obraNombre: obraMeta?.nombre || '', proyectoId,
+    subcontratoId: subId, subcontratoNombre: subNombre,
+    subEstimacionId: eid, subEstimacionNumero: est.numero,
+    proveedorNombre,
+    refKey,
+    etiqueta: ret.etiqueta || 'Retención',
+    modo: ret.modo || 'fijo',
+    pct: ret.modo === 'pct' ? (Number(ret.pct) || 0) : null,
+    monto: Math.round(monto * 100) / 100,
+    fecha: esLiberacion ? (ret.liberadaAt || Date.now()) : (est.fechaCorte || Date.now()),
+    descripcion: esLiberacion
+      ? `Liberación de ${ret.etiqueta || 'retención'} a ${proveedorNombre} — "${subNombre}", estimación #${est.numero}`
+      : `Retención de ${ret.etiqueta || 'garantía'} a ${proveedorNombre} — "${subNombre}", estimación #${est.numero} (no es gasto: el dinero no salió)`,
+    estado: 'pendiente',
+    creadoPor: state.user?.uid || ''
+  };
+
+  if (existing) await updateBuzonItem(existing[0], { ...payload, actualizadoAt: Date.now() });
+  else await pushBuzonItem(payload);
 }
 
 // Sincroniza con /shared/buzon: crea o actualiza item tipo='estimacion_subcontratista'
@@ -496,7 +778,13 @@ async function sincronizarPagoSubConBuzon(obraId, subId, eid, sub, est, ganador,
     proveedorTelefono: ganador?.telefono || '',
     monto: pago,
     fecha: pago.fecha,
-    descripcion: `Pago a ${proveedorNombre} — Subcontrato "${subNombre}", estimación #${est.numero}${proyectoId ? '' : ' (obra sin vincular)'}`,
+    // Si hubo retención, el gasto es el NETO que salió de caja. El bruto y el
+    // detalle van en `monto` para que el contador entienda la diferencia.
+    descripcion: `Pago a ${proveedorNombre} — Subcontrato "${subNombre}", estimación #${est.numero}`
+      + (Number(pago.retencionTotal) > 0 ? ` — neto tras retener ${money(pago.retencionTotal)}` : '')
+      + (proyectoId ? '' : ' (obra sin vincular)'),
+    retencionTotal: Number(pago.retencionTotal) || 0,
+    importeBruto: Number(pago.importeBruto) || Number(pago.importe) || 0,
     desglose: Array.isArray(desglose) ? desglose : null,
     estado: 'pendiente',
     creadoPor: state.user?.uid || ''

@@ -945,6 +945,14 @@ export async function setSubEstimacionAvance(obraId, subId, estId, conceptoId, c
 export async function setSubEstimacionConIva(obraId, subId, estId, conIva) {
   await set(_ref(`obras/${obraId}/subcontratos/${subId}/estimaciones/${estId}/conIva`), conIva !== false);
 }
+// Retenciones de una estimación al sub (fondo de garantía / vicios ocultos, etc.).
+// Se descuentan del pago de ESTA estimación y se liberan después, cuando venza el
+// periodo de garantía. Cada una: { etiqueta, modo:'pct'|'fijo', pct, monto,
+// liberadaAt, liberadaMonto }.
+export async function setSubEstimacionRetenciones(obraId, subId, estId, retenciones) {
+  await set(_ref(`obras/${obraId}/subcontratos/${subId}/estimaciones/${estId}/retenciones`), retenciones || []);
+}
+
 export async function cerrarSubEstimacion(obraId, subId, estId, uid) {
   await update(_ref(`obras/${obraId}/subcontratos/${subId}/estimaciones/${estId}`), {
     estado: 'cerrada', cerradaAt: Date.now(), cerradaPor: uid
