@@ -401,9 +401,13 @@ export function buildResumenData(obra, estId) {
   }
   // IVA de una estimación: monto MANUAL si se capturó (est.ivaMonto); si no, 16%
   // sobre su subtotal. Así solo se cobra el IVA de los materiales que lo causan.
+  // Lo de PROYECCIÓN no cuenta, igual que su avance: si no se excluye aquí, una
+  // estimación en proyección con IVA manual mete ese IVA al acumulado aunque su
+  // subtotal valga cero, y descuadra el neto a cobrar contra la suma real.
   const ivaDeEstim = (eid) => {
     const e = obra.estimaciones?.[eid];
-    return (e && e.ivaMonto != null && e.ivaMonto !== '') ? (Number(e.ivaMonto) || 0) : (subtotalPorEstim[eid] || 0) * ivaPct;
+    if (!e || e.esProyeccion) return 0;
+    return (e.ivaMonto != null && e.ivaMonto !== '') ? (Number(e.ivaMonto) || 0) : (subtotalPorEstim[eid] || 0) * ivaPct;
   };
   const ivaManual = est.ivaMonto != null && est.ivaMonto !== '';
   const ivaEsta = ivaDeEstim(estId);
