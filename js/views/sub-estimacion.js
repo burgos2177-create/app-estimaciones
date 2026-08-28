@@ -77,7 +77,7 @@ export async function renderSubEstimacion({ params }) {
 
   // Retenciones (fondo de garantía / vicios ocultos). Se descuentan del pago de
   // ESTA estimación y se liberan después. Las de modo 'pct' se recalculan contra
-  // el subtotal vivo; las 'fijo' se quedan en el monto capturado.
+  // el importe vivo; las 'fijo' se quedan en el monto capturado.
   // RTDB puede devolver el array como objeto si hubo huecos; normalizamos.
   let retenciones = Array.isArray(est.retenciones)
     ? est.retenciones.filter(Boolean).map(r => ({ ...r }))
@@ -93,12 +93,16 @@ export async function renderSubEstimacion({ params }) {
     summaryNeto
   ]);
 
-  function montoRetencion(r, subtotal) {
-    return r.modo === 'pct' ? subtotal * (Number(r.pct) || 0) : (Number(r.monto) || 0);
+  // La retención se calcula sobre el IMPORTE TOTAL de la estimación (con IVA
+  // cuando aplica), no sobre el subtotal: se retiene una parte de todo lo que se
+  // le iba a entregar, IVA incluido.
+  function montoRetencion(r, importeBruto) {
+    return r.modo === 'pct' ? importeBruto * (Number(r.pct) || 0) : (Number(r.monto) || 0);
   }
-  function totalRetenido(subtotal) {
-    return retenciones.reduce((s, r) => s + montoRetencion(r, subtotal), 0);
+  function totalRetenido(importeBruto) {
+    return retenciones.reduce((s, r) => s + montoRetencion(r, importeBruto), 0);
   }
+  const baseLabel = () => estConIva ? 'del importe c/IVA' : 'del importe';
 
   // Tabla editable
   const totalsRow = h('tr', { style: { fontWeight: 600, background: 'var(--bg-2)' } });
@@ -121,9 +125,9 @@ export async function renderSubEstimacion({ params }) {
     summarySub.textContent = money(subtotal);
     summaryIva.textContent = money(iva);
     summaryImp.textContent = money(importe);
-    summaryNeto.textContent = money(importe - totalRetenido(subtotal));
+    summaryNeto.textContent = money(importe - totalRetenido(importe));
     netoWrap.classList.toggle('hidden', retenciones.length === 0);
-    renderRetenciones(subtotal);
+    renderRetenciones(importe);
   }
 
   function subtotalActual() {
@@ -133,17 +137,23 @@ export async function renderSubEstimacion({ params }) {
     }
     return s;
   }
+  // Base de las retenciones: el importe bruto de la estimación (subtotal + IVA
+  // si aplica). Es la misma cifra en la tarjeta, el diálogo de pago y el buzón.
+  function importeBrutoActual() {
+    const s = subtotalActual();
+    return estConIva ? s * (1 + ivaPct) : s;
+  }
 
-  function renderRetenciones(subtotal) {
+  function renderRetenciones(importeBruto) {
     retencionesCard.innerHTML = '';
     const filas = retenciones.map((r, i) => {
-      const monto = montoRetencion(r, subtotal);
+      const monto = montoRetencion(r, importeBruto);
       const liberada = !!r.liberadaAt;
       return h('div', { class: 'row', style: { padding: '6px 0', borderTop: i ? '1px solid var(--border)' : 'none', fontSize: '12px' } }, [
         h('div', { style: { flex: 1, minWidth: 0 } }, [
           h('div', {}, [
             h('b', {}, r.etiqueta || 'Retención'),
-            r.modo === 'pct' && h('span', { class: 'muted', style: { marginLeft: '6px' } }, `${pct(Number(r.pct) || 0)} del subtotal`),
+            r.modo === 'pct' && h('span', { class: 'muted', style: { marginLeft: '6px' } }, `${pct(Number(r.pct) || 0)} ${baseLabel()}`),
             liberada && h('span', { class: 'tag ok', style: { marginLeft: '6px' } }, `✓ liberada ${dateMx(r.liberadaAt)}`)
           ])
         ]),
@@ -159,7 +169,7 @@ export async function renderSubEstimacion({ params }) {
         }, '✕')
       ]);
     });
-    const subtotalRet = totalRetenido(subtotal);
+    const subtotalRet = totalRetenido(importeBruto);
     retencionesCard.appendChild(h('div', { class: 'row', style: { marginBottom: '6px' } }, [
       h('span', { class: 'muted', style: { fontSize: '12px' } }, 'Retenciones (se descuentan del pago y se liberan después)'),
       h('div', { style: { flex: 1 } }),
@@ -334,16 +344,15 @@ export async function renderSubEstimacion({ params }) {
     const pctIn = h('input', { type: 'number', step: '0.01', min: '0', max: '100', value: '5' });
     const montoIn = h('input', { type: 'number', step: '0.01', value: '', disabled: true });
     const prev = h('div', { style: { fontSize: '12px', marginTop: '10px', paddingTop: '10px', borderTop: '1px solid var(--border)' } });
-    const sub = subtotalActual();
-    const iva = estConIva ? sub * ivaPct : 0;
+    const base = importeBrutoActual();
     function refresh() {
       pctIn.disabled = !rPct.checked; montoIn.disabled = !rFijo.checked;
-      const monto = rPct.checked ? sub * ((Number(pctIn.value) || 0) / 100) : (Number(montoIn.value) || 0);
-      const yaRetenido = totalRetenido(sub);
+      const monto = rPct.checked ? base * ((Number(pctIn.value) || 0) / 100) : (Number(montoIn.value) || 0);
+      const yaRetenido = totalRetenido(base);
       prev.innerHTML = '';
-      prev.appendChild(h('div', {}, ['Se retendrían ', h('b', { class: 'mono warn' }, money(monto)), ' del subtotal de ', h('b', { class: 'mono' }, money(sub)), '.']));
+      prev.appendChild(h('div', {}, ['Se retendrían ', h('b', { class: 'mono warn' }, money(monto)), ' del importe de ', h('b', { class: 'mono' }, money(base)), estConIva ? ' (c/IVA).' : '.']));
       prev.appendChild(h('div', { class: 'muted', style: { marginTop: '4px' } }, [
-        'Neto a pagarle al sub: ', h('b', { class: 'mono' }, money(sub + iva - yaRetenido - monto))
+        'Neto a pagarle al sub: ', h('b', { class: 'mono' }, money(base - yaRetenido - monto))
       ]));
     }
     [rPct, rFijo].forEach(r => r.addEventListener('change', refresh));
@@ -356,7 +365,7 @@ export async function renderSubEstimacion({ params }) {
         h('p', { class: 'muted', style: { fontSize: '12px', marginTop: 0 } }, 'Se descuenta del pago de esta estimación y queda pendiente de liberar. Al registrar el pago, el buzón recibe el gasto por el neto y la retención por separado, para que el contador la lleve como fondo pendiente.'),
         h('div', { class: 'field' }, [h('label', {}, 'Concepto de la retención'), etq]),
         h('div', { style: { marginTop: '10px' } }, [
-          h('label', { class: 'row' }, [rPct, h('span', {}, '% del subtotal')]),
+          h('label', { class: 'row' }, [rPct, h('span', {}, `% ${estConIva ? 'del importe c/IVA' : 'del importe'}`)]),
           h('div', { class: 'field', style: { marginTop: '6px' } }, [h('label', {}, 'Porcentaje (%)'), pctIn]),
           h('label', { class: 'row', style: { marginTop: '8px' } }, [rFijo, h('span', {}, 'Monto fijo')]),
           h('div', { class: 'field', style: { marginTop: '6px' } }, [h('label', {}, 'Monto'), montoIn])
@@ -366,7 +375,7 @@ export async function renderSubEstimacion({ params }) {
       confirmLabel: 'Agregar',
       onConfirm: () => {
         if (!etq.value.trim()) { toast('Ponle un concepto a la retención', 'warn'); return false; }
-        const monto = rPct.checked ? sub * ((Number(pctIn.value) || 0) / 100) : (Number(montoIn.value) || 0);
+        const monto = rPct.checked ? base * ((Number(pctIn.value) || 0) / 100) : (Number(montoIn.value) || 0);
         if (!(monto > 0)) { toast('La retención debe ser mayor a cero', 'warn'); return false; }
         return true;
       }
@@ -383,8 +392,8 @@ export async function renderSubEstimacion({ params }) {
   async function liberarRetencionDialog(idx) {
     const r = retenciones[idx];
     if (!r) return;
-    const sub = subtotalActual();
-    const monto = montoRetencion(r, sub);
+    const base = importeBrutoActual();
+    const monto = montoRetencion(r, base);
     const montoIn = h('input', { type: 'number', step: '0.01', value: monto.toFixed(2) });
     const fechaIn = h('input', { type: 'date', value: new Date().toISOString().slice(0, 10) });
     const ok = await modal({
@@ -412,7 +421,7 @@ export async function renderSubEstimacion({ params }) {
     try {
       retenciones[idx] = { ...r, liberadaAt, liberadaMonto, montoRetenido: monto };
       await setSubEstimacionRetenciones(obraId, subId, eid, retenciones);
-      await enviarRetencionAlBuzon(obraId, subId, eid, sub, est, ganador, retenciones[idx], idx, 'liberacion');
+      await enviarRetencionAlBuzon(obraId, subId, eid, base, est, ganador, retenciones[idx], idx, 'liberacion');
       est.retenciones = retenciones;
       toast('Retención liberada y enviada al buzón', 'ok');
       recompute();
@@ -558,15 +567,15 @@ export async function renderSubEstimacion({ params }) {
       const pendientes = retenciones.filter(r => !r.liberadaAt);
       retencionPreview.innerHTML = '';
       if (!pendientes.length) return;
-      const subCalc = subtotalActual();
+      const baseRet = importeBrutoActual();
       const bruto = conIva ? (Number(importeIn.value) || 0) : (Number(subtotalIn.value) || 0);
-      const totalRet = pendientes.reduce((s, r) => s + montoRetencion(r, subCalc), 0);
+      const totalRet = pendientes.reduce((s, r) => s + montoRetencion(r, baseRet), 0);
       retencionPreview.appendChild(h('div', { class: 'muted', style: { marginBottom: '4px' } }, 'Retenciones de esta estimación:'));
       for (const r of pendientes) {
         retencionPreview.appendChild(h('div', { class: 'row' }, [
           h('span', {}, r.etiqueta || 'Retención'),
           h('div', { style: { flex: 1 } }),
-          h('span', { class: 'mono warn' }, '−' + money(montoRetencion(r, subCalc)))
+          h('span', { class: 'mono warn' }, '−' + money(montoRetencion(r, baseRet)))
         ]));
       }
       retencionPreview.appendChild(h('div', { class: 'row', style: { marginTop: '6px', paddingTop: '6px', borderTop: '1px solid var(--border)', fontWeight: 600 } }, [
@@ -652,11 +661,12 @@ export async function renderSubEstimacion({ params }) {
           // Las retenciones se descuentan del pago: el gasto que ve el contador
           // es el NETO que salió de caja, y cada retención va aparte al buzón
           // como fondo pendiente (no es gasto hasta que se libere).
-          const subCalc = subtotalActual();
+          const baseRet = importeBrutoActual();
           const retenidas = retenciones.filter(r => !r.liberadaAt).map((r, i) => ({
             idx: i, etiqueta: r.etiqueta || 'Retención', modo: r.modo || 'fijo',
             pct: r.modo === 'pct' ? (Number(r.pct) || 0) : null,
-            monto: Math.round(montoRetencion(r, subCalc) * 100) / 100
+            base: 'importe',
+            monto: Math.round(montoRetencion(r, baseRet) * 100) / 100
           }));
           const retencionTotal = retenidas.reduce((s, r) => s + r.monto, 0);
           pago.importeBruto = Math.round(importe * 100) / 100;
@@ -668,7 +678,7 @@ export async function renderSubEstimacion({ params }) {
           await sincronizarPagoSubConBuzon(obraId, subId, eid, sub, est, ganador, pago, desglose);
           for (const r of retenciones) {
             if (r.liberadaAt) continue;
-            await enviarRetencionAlBuzon(obraId, subId, eid, subCalc, est, ganador, r, retenciones.indexOf(r), 'retencion');
+            await enviarRetencionAlBuzon(obraId, subId, eid, baseRet, est, ganador, r, retenciones.indexOf(r), 'retencion');
           }
           toast(retencionTotal > 0
             ? 'Pago neto y retención enviados al buzón del contador'
@@ -691,7 +701,7 @@ export async function renderSubEstimacion({ params }) {
 //   movimiento 'liberacion'  → ahora sí sale el dinero: es gasto.
 // Van con `refKey` para que el contador pueda parear la liberación con su
 // retención original y no las cuente dos veces.
-async function enviarRetencionAlBuzon(obraId, subId, eid, subtotalEst, est, ganador, ret, idx, movimiento) {
+async function enviarRetencionAlBuzon(obraId, subId, eid, importeBrutoEst, est, ganador, ret, idx, movimiento) {
   const [links, obraMeta, sub] = await Promise.all([
     getObraLinks(),
     rread(`obras/${obraId}/meta`),
@@ -704,7 +714,7 @@ async function enviarRetencionAlBuzon(obraId, subId, eid, subtotalEst, est, gana
   const esLiberacion = movimiento === 'liberacion';
   const monto = esLiberacion
     ? (Number(ret.liberadaMonto) || 0)
-    : (ret.modo === 'pct' ? subtotalEst * (Number(ret.pct) || 0) : (Number(ret.monto) || 0));
+    : (ret.modo === 'pct' ? importeBrutoEst * (Number(ret.pct) || 0) : (Number(ret.monto) || 0));
 
   const items = await listBuzonItems();
   const existing = Object.entries(items).find(([, it]) =>
@@ -725,6 +735,7 @@ async function enviarRetencionAlBuzon(obraId, subId, eid, subtotalEst, est, gana
     etiqueta: ret.etiqueta || 'Retención',
     modo: ret.modo || 'fijo',
     pct: ret.modo === 'pct' ? (Number(ret.pct) || 0) : null,
+    base: 'importe',            // el % se calcula sobre el importe c/IVA, no el subtotal
     monto: Math.round(monto * 100) / 100,
     fecha: esLiberacion ? (ret.liberadaAt || Date.now()) : (est.fechaCorte || Date.now()),
     descripcion: esLiberacion
