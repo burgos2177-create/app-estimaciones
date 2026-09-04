@@ -715,6 +715,11 @@ async function sincronizarConBuzon(obraId, estId, est, pago) {
 async function printConfigDialog(obra, estId, formato) {
   const m = obra.meta || {};
   const anticipoPct = Number(m.anticipoPct ?? 0);
+  // La tasa que va a salir impresa es la de ESTA estimación, que puede ser una
+  // pactada distinta a la del contrato. Anunciar la del contrato confundía.
+  const estPrint = obra.estimaciones?.[estId] || {};
+  const amortPctPrint = (estPrint.amortPct != null && estPrint.amortPct !== '') ? Number(estPrint.amortPct) || 0 : anticipoPct;
+  const amortPactada = estPrint.amortPct != null && estPrint.amortPct !== '';
 
   const modoEst = h('input', { type: 'radio', name: 'modo', value: 'estimacion', checked: true });
   const modoEC = h('input', { type: 'radio', name: 'modo', value: 'estadoCuenta' });
@@ -752,7 +757,10 @@ async function printConfigDialog(obra, estId, formato) {
 
     h('h3', { style: { marginTop: '14px' } }, 'Opciones'),
     h('label', { class: 'row', style: { padding: '4px 0' } }, [soloMov, h('span', {}, 'Solo conceptos con avance en esta estimación')]),
-    h('label', { class: 'row', style: { padding: '4px 0' } }, [mostrarAmort, h('span', {}, 'Mostrar amortización de anticipo' + (anticipoPct === 0 ? ' (sin anticipo configurado)' : ` (${pct(anticipoPct)})`))]),
+    h('label', { class: 'row', style: { padding: '4px 0' } }, [mostrarAmort, h('span', {}, [
+      'Mostrar amortización de anticipo' + (anticipoPct === 0 ? ' (sin anticipo configurado)' : ` (${pct(amortPctPrint)})`),
+      amortPactada && h('span', { class: 'tag ok', style: { marginLeft: '6px', fontSize: '10px' }, title: `Esta estimación pactó ${pct(amortPctPrint)} en vez del ${pct(anticipoPct)} del contrato` }, 'pactada')
+    ])]),
     h('label', { class: 'row', style: { padding: '4px 0' } }, [mostrarEC, h('span', {}, 'Incluir bloque de Estado de Cuenta')]),
     h('label', { class: 'row', style: { padding: '4px 0' } }, [incluirMemoria, h('span', {}, '📐 Incluir memoria de generadores (detalle de medición, solo PDF)')]),
     h('label', { class: 'row', style: { padding: '4px 0' } }, [incluirAnexo, h('span', {}, '📎 Anexar croquis y fotos del sitio (requiere Drive conectado, solo PDF)')]),

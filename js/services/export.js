@@ -9,6 +9,7 @@ import { calcGeneradorTotal, getColumns, calcPartidaTotal } from './plantillas.j
 import { amortRateOnSubtotal } from './contrato.js';
 import { SOGRUB_LOGO, SOGRUB_LOGO_RATIO, BRAND } from '../config/brand.js';
 import { getImageObjectUrl, isSignedIn as driveSignedIn } from './drive.js';
+import { APP_VERSION } from '../config/version.js';
 
 const fmtMxn = new Intl.NumberFormat('es-MX', { style: 'currency', currency: 'MXN', minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const fmtN2 = new Intl.NumberFormat('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -1328,7 +1329,9 @@ function drawFooter(doc, data, m) {
   const h = doc.internal.pageSize.height;
   doc.setDrawColor(220); doc.line(30, h - 30, w - 30, h - 30);
   doc.setFontSize(8); doc.setTextColor(150);
-  doc.text(`${m.nombre || ''}  ·  Contrato ${m.contratoNo || ''}`, 30, h - 18);
+  // La versión que generó el documento: sin ella, un PDF con cifras viejas es
+  // indistinguible de un bug, y ya costó un par de vueltas averiguarlo.
+  doc.text(`${m.nombre || ''}  ·  Contrato ${m.contratoNo || ''}  ·  ${APP_VERSION}`, 30, h - 18);
   doc.text(`Página ${data.pageNumber}`, w - 30, h - 18, { align: 'right' });
 }
 
