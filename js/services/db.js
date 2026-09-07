@@ -791,6 +791,13 @@ export async function setPagoCliente(obraId, estimId, pago) {
   await set(_ref(`obras/${obraId}/estimaciones/${estimId}/pagoCliente`), pago);
 }
 
+// Borra un pago registrado por error. Hacía falta: un pago mal capturado solo se
+// podía EDITAR a otro monto, nunca quitar, así que seguía sumando en la caja del
+// cliente aunque el contador lo hubiera rechazado o borrado del otro lado.
+export async function deletePagoCliente(obraId, estimId) {
+  await remove(_ref(`obras/${obraId}/estimaciones/${estimId}/pagoCliente`));
+}
+
 // Amortización de anticipo PACTADA para una estimación puntual (fracción: 0.20 =
 // 20%). Si es null/'' se borra → esa estimación vuelve a la tasa del contrato.
 // No cambia el default de la obra ni el de las demás estimaciones.

@@ -4,7 +4,7 @@
 
 import { h, modal, toast, buzonBadge } from '../util/dom.js';
 import { renderShell } from './shell.js';
-import { rread, loadObra, setPagoCliente, setEstimacionIvaMonto, updateObraMeta, getObraLinks, listBuzonItems, pushBuzonItem, updateBuzonItem, setAvanceObra, setAnticipoOtorgado, getContratoVigente, setEstimacionAmortPct } from '../services/db.js';
+import { rread, loadObra, setPagoCliente, deletePagoCliente, setEstimacionIvaMonto, updateObraMeta, getObraLinks, listBuzonItems, pushBuzonItem, updateBuzonItem, setAvanceObra, setAnticipoOtorgado, getContratoVigente, setEstimacionAmortPct } from '../services/db.js';
 import { state } from '../state/store.js';
 import { money, num, dateMx, pct } from '../util/format.js';
 import { buildResumenData, exportResumenPdf, exportResumenXlsx, exportEstimacionJson, computeAvanceObra } from '../services/export.js';
@@ -82,6 +82,27 @@ async function draw(obraId, obra, estId) {
       bloqueado ? '🔒 Ver pago' : '💵 Registrar / enviar pago')
     : null;
   const badge = buzonBadge(buzonEstado, buzonItem);
+  // Quitar un pago capturado por error. Solo si hay pago y el contador no lo ha
+  // aprobado todavía (aprobado ya generó movimiento contable del otro lado).
+  const quitarPagoBtn = (editable && est.pagoCliente && !bloqueado)
+    ? h('button', {
+        class: 'btn sm danger ghost', style: { marginLeft: '6px' },
+        title: 'Borrar este pago: se registró por error y el dinero no entró',
+        onClick: async () => { const ok = await quitarPagoDialog(obraId, estId, est); if (ok) renderResumen({ params: { id: obraId } }); }
+      }, '🗑')
+    : null;
+
+  // Pagos que siguen contando en la caja pese a que el contador los rechazó.
+  // Rechazar en bitácora NO borra nada aquí (puede ser un rechazo de forma y el
+  // dinero sí haber entrado), así que se avisa en vez de descontarlo solo.
+  const pagosRechazados = estsArr.filter(e => {
+    if (!e.pagoCliente) return false;
+    const its = Object.values(buzonItems).filter(it =>
+      it?.tipo === 'pago_cliente' && it?.obraId === obraId && it?.estimId === e.id);
+    if (!its.length) return false;
+    const vivo = its.find(it => !['rechazado', 'cancelado', 'cerrado'].includes(it.estado));
+    return !vivo && its.some(it => it.estado === 'rechazado');
+  });
 
   // Bloque de anticipo (solo si > 0)
   const anticipoCard = anticipoPct > 0 ? h('div', { class: 'card' }, [
@@ -155,7 +176,7 @@ async function draw(obraId, obra, estId) {
     ]));
   }
   ecBodyRows.push(h('tr', {}, [
-    h('td', {}, ['Pagos cliente (acumulado) ', editPagosBtn, badge,
+    h('td', {}, ['Pagos cliente (acumulado) ', editPagosBtn, quitarPagoBtn, badge,
       excesoAnticipo ? h('div', { class: 'muted', style: { fontSize: '11px', marginTop: '2px' } },
         excesoAnticipo > 0
           ? `incluye ${money(excesoAnticipo)} de anticipo excedente (a favor)`
@@ -258,6 +279,18 @@ async function draw(obraId, obra, estId) {
       kvBig('Pagos recibidos', money(importePagado), ''),
       kvBig('Total recibido', money(totalRecibidoCliente), ''),
       kvBig('Ejecutado (c/IVA)', money(importeAcumEjecCIVA), '')
+    ]),
+    pagosRechazados.length > 0 && h('div', { style: { marginTop: '12px', paddingTop: '10px', borderTop: '1px solid var(--border)', fontSize: '12px' } }, [
+      h('span', { class: 'tag danger' }, `⚠ ${pagosRechazados.length} pago(s) rechazado(s) por el contador siguen contando aquí`),
+      h('div', { style: { marginTop: '6px' } }, pagosRechazados.map(e => h('div', {}, [
+        `Estimación #${e.numero}: `, h('b', { class: 'mono' }, money(e.pagoCliente.importe || 0)),
+        h('button', {
+          class: 'btn sm ghost', style: { marginLeft: '8px' },
+          onClick: () => draw(obraId, obra, e.id)
+        }, 'Ir a revisarlo')
+      ]))),
+      h('div', { class: 'muted', style: { fontSize: '11px', marginTop: '6px' } },
+        'Si el dinero SÍ entró y el contador lo rechazó por forma, corrige y reenvía el pago. Si nunca entró, quítalo con 🗑 para que deje de inflar la caja.')
     ]),
     // Peras con peras: subtotal e IVA separados. El anticipo cuenta como subtotal;
     // cada pago aporta su subtotal y su IVA. Así el ajuste de IVA manual no
@@ -442,6 +475,44 @@ async function editAnticipoOtorgadoDialog(obraId, obra, actual, anticipoPct) {
       } catch (err) { toast('Error: ' + err.message, 'danger'); return false; }
     }
   });
+}
+
+// Quita un pago capturado por error. Antes un pago solo se podía EDITAR a otro
+// monto, nunca borrar: si se registraba en la estimación equivocada seguía
+// sumando en la caja aunque el contador ya lo hubiera rechazado o borrado.
+async function quitarPagoDialog(obraId, estId, est) {
+  const pago = est.pagoCliente || {};
+  let matching = [];
+  try {
+    const items = await listBuzonItems();
+    matching = Object.entries(items).filter(([, it]) =>
+      it?.tipo === 'pago_cliente' && it?.obraId === obraId && it?.estimId === estId);
+  } catch {}
+  const pend = matching.find(([, it]) => it.estado === 'pendiente' || it.estado === 'huerfano');
+  const rechazado = matching.some(([, it]) => it.estado === 'rechazado');
+
+  const ok = await modal({
+    title: `Quitar el pago de la estimación #${est.numero}`, danger: true, confirmLabel: 'Quitar pago',
+    body: h('div', {}, [
+      h('p', {}, ['Se borrará el pago de ', h('b', { class: 'mono' }, money(pago.importe || 0)),
+        pago.fecha ? ` registrado el ${dateMx(pago.fecha)}` : '', '.']),
+      rechazado && h('div', { class: 'tag warn', style: { marginBottom: '8px' } }, '⚠ El contador ya lo había rechazado en bitácora'),
+      pend && h('div', { class: 'tag muted', style: { marginBottom: '8px' } }, 'Su item pendiente del buzón se cancelará'),
+      h('p', { class: 'muted', style: { fontSize: '12px' } }, 'Úsalo cuando el pago se capturó por error y el dinero NO entró. Deja de contar en la caja del cliente y en la diferencia financiera.')
+    ])
+  });
+  if (!ok) return false;
+  try {
+    await deletePagoCliente(obraId, estId);
+    if (pend) {
+      await updateBuzonItem(pend[0], {
+        estado: 'cancelado', canceladoAt: Date.now(), canceladoPor: state.user?.uid || '',
+        descripcionCancelado: 'El pago se quitó en estimaciones: se había capturado por error.'
+      });
+    }
+    toast('Pago quitado', 'ok');
+    return true;
+  } catch (err) { toast('Error: ' + err.message, 'danger'); return false; }
 }
 
 // Anticipo REAL recibido del cliente (puede diferir del contractual).
