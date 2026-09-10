@@ -8,11 +8,122 @@
   <script src="https://cdn.sheetjs.com/xlsx-0.20.2/package/dist/xlsx.full.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/jspdf-autotable@3.8.2/dist/jspdf.plugin.autotable.min.js"></script>
+  <!-- Estilos del arranque, embebidos: si main.css no cargó, esta pantalla igual
+       se ve. Una pantalla negra sin nada no dice si falló el JS, el CSS o la red. -->
+  <style>
+    #boot { min-height: 100vh; display: flex; align-items: center; justify-content: center;
+            padding: 24px; background: #0e1117; color: #c9d1d9;
+            font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+    #boot .card { max-width: 520px; width: 100%; text-align: center; }
+    #boot .logo { font-size: 15px; font-weight: 700; color: #4cc2ff; letter-spacing: .3px; margin-bottom: 18px; }
+    #boot .msg { font-size: 14px; line-height: 1.6; }
+    #boot .hint { font-size: 12px; color: #8b949e; margin-top: 8px; }
+    #boot .acts { margin-top: 18px; display: none; gap: 8px; justify-content: center; flex-wrap: wrap; }
+    #boot button { background: #1b2230; color: #c9d1d9; border: 1px solid #2c3444;
+                   padding: 8px 14px; border-radius: 6px; font-size: 13px; cursor: pointer; }
+    #boot button:hover { background: #232c3d; }
+    #boot button.primary { background: #4cc2ff; border-color: #4cc2ff; color: #08121a; font-weight: 600; }
+    #boot pre { display: none; text-align: left; margin-top: 16px; padding: 12px;
+                background: #11161f; border: 1px solid #2c3444; border-radius: 6px;
+                font-size: 11px; color: #ff9d9d; white-space: pre-wrap; word-break: break-word;
+                max-height: 220px; overflow: auto; }
+    #boot .spin { display: inline-block; width: 14px; height: 14px; margin-right: 8px;
+                  border: 2px solid #2c3444; border-top-color: #4cc2ff; border-radius: 50%;
+                  vertical-align: -2px; animation: bspin .8s linear infinite; }
+    @keyframes bspin { to { transform: rotate(360deg); } }
+    @media (prefers-reduced-motion: reduce) { #boot .spin { animation: none; } }
+  </style>
 </head>
 <body>
-  <div id="app"></div>
+  <div id="app">
+    <div id="boot">
+      <div class="card">
+        <div class="logo">ESTIMACIONES SGR</div>
+        <div class="msg" id="boot-msg"><span class="spin"></span>Cargando…</div>
+        <div class="hint" id="boot-hint"></div>
+        <div class="acts" id="boot-acts">
+          <button class="primary" id="boot-retry">Reintentar</button>
+          <button id="boot-reset">Limpiar caché y reintentar</button>
+        </div>
+        <pre id="boot-err"></pre>
+      </div>
+    </div>
+  </div>
   <div id="modal-root"></div>
   <div id="toast-root"></div>
+
+  <!-- Script CLÁSICO (no módulo) a propósito: tiene que correr aunque el grafo de
+       módulos no cargue, que es justo cuando hace falta. -->
+  <script>
+    (function () {
+      var boot = document.getElementById('boot');
+      var msg = document.getElementById('boot-msg');
+      var hint = document.getElementById('boot-hint');
+      var acts = document.getElementById('boot-acts');
+      var errBox = document.getElementById('boot-err');
+      var shown = false;
+
+      function vivo() { return boot && document.body.contains(boot); }
+
+      // Muestra el fallo EN PANTALLA. Sin esto, cualquier error de carga deja la
+      // página en negro y no hay manera de diagnosticar desde el celular en obra.
+      function fallo(titulo, pista, detalle) {
+        if (!vivo() || window.__appMounted || shown) return;
+        shown = true;
+        msg.textContent = titulo;
+        hint.textContent = pista || '';
+        acts.style.display = 'flex';
+        if (detalle) { errBox.textContent = String(detalle).slice(0, 1200); errBox.style.display = 'block'; }
+      }
+
+      window.addEventListener('error', function (e) {
+        fallo('No se pudo cargar la app.',
+              'Suele ser señal intermitente o código a medio actualizar.',
+              (e.message || '') + (e.filename ? '\n' + e.filename + ':' + e.lineno : ''));
+      });
+      window.addEventListener('unhandledrejection', function (e) {
+        var r = e.reason;
+        fallo('No se pudo cargar la app.',
+              'Suele ser señal intermitente o código a medio actualizar.',
+              (r && (r.stack || r.message)) || String(r));
+      });
+
+      // Si nada se dibujó en 15 s, algo no va a llegar: Firebase sin responder,
+      // red caída o un módulo colgado. Mejor decirlo que dejar la pantalla negra.
+      setTimeout(function () {
+        fallo('Está tardando más de lo normal.',
+              'Puede ser la señal, o que el servidor de datos no responda. Reintenta; si sigue igual, limpia el caché.');
+      }, 15000);
+
+      document.getElementById('boot-retry').addEventListener('click', function () {
+        location.reload();
+      });
+
+      // Reinicio duro: quita el service worker y sus cachés. Es la salida cuando
+      // quedó una mezcla de código viejo y nuevo, que ya nos pasó.
+      document.getElementById('boot-reset').addEventListener('click', function () {
+        var btn = this;
+        btn.disabled = true; btn.textContent = 'Limpiando…';
+        var tareas = [];
+        try {
+          if ('serviceWorker' in navigator) {
+            tareas.push(navigator.serviceWorker.getRegistrations().then(function (rs) {
+              return Promise.all(rs.map(function (r) { return r.unregister(); }));
+            }));
+          }
+          if (window.caches) {
+            tareas.push(caches.keys().then(function (ks) {
+              return Promise.all(ks.map(function (k) { return caches.delete(k); }));
+            }));
+          }
+        } catch (e) { /* seguimos: recargar igual ayuda */ }
+        Promise.all(tareas).catch(function () {}).then(function () {
+          location.replace(location.pathname + '?fresh=' + Date.now());
+        });
+      });
+    })();
+  </script>
+
   <script type="module">
     // Service worker network-first: garantiza que SIEMPRE cargues el código
     // más reciente del servidor (no solo main.js, sino todo el grafo de
@@ -22,7 +133,14 @@
     }
     // Cache-bust del punto de entrada (respaldo si el SW aún no está activo).
     const v = Date.now();
-    import('./js/main.js?v=' + v);
+    import('./js/main.js?v=' + v).catch((err) => {
+      // El rechazo de este import NO se propaga a window.onerror en todos los
+      // navegadores, así que lo reportamos a mano.
+      console.error('Fallo al cargar main.js', err);
+      window.dispatchEvent(new PromiseRejectionEvent('unhandledrejection', {
+        promise: Promise.reject(err), reason: err, cancelable: true
+      }));
+    });
   </script>
 </body>
 </html>

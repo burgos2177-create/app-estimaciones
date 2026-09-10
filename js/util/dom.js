@@ -27,6 +27,9 @@ export function mount(rootSelector, node) {
   const root = typeof rootSelector === 'string' ? document.querySelector(rootSelector) : rootSelector;
   clear(root);
   root.appendChild(node);
+  // Le avisa a la pantalla de arranque (index.html) que la app ya dibujó algo,
+  // para que su watchdog no muestre "no se pudo cargar" sobre una app que sí vive.
+  window.__appMounted = true;
   return root;
 }
 
