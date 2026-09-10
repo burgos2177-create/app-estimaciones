@@ -4,7 +4,7 @@
 import { h, modal, toast, buzonBadge } from '../util/dom.js';
 import { renderShell } from './shell.js';
 import { rread, loadObra, buildConceptosLookup, setSubEstimacionAvance, setSubEstimacionConIva, setPagoSub,
-         cerrarSubEstimacion, reabrirSubEstimacion, setSubEstimacionRetenciones,
+         cerrarSubEstimacion, reabrirSubEstimacion, setSubEstimacionRetenciones, setSubEstimacionAdhoc,
          getObraLinks, listBuzonItems, pushBuzonItem, updateBuzonItem } from '../services/db.js';
 import { state } from '../state/store.js';
 import { navigate, dispatch } from '../state/router.js';
@@ -104,6 +104,17 @@ export async function renderSubEstimacion({ params }) {
   }
   const baseLabel = () => estConIva ? 'del importe c/IVA' : 'del importe';
 
+  // Conceptos AD-HOC: retrabajos y reparaciones que se le deben al sub pero que
+  // no estaban en su alcance ni existen en el catálogo. No tocan el catálogo (ese
+  // es el contrato con el CLIENTE); cada uno se imputa a un concepto real para
+  // que su costo aterrice en algún rubro de la obra.
+  let adhoc = Array.isArray(est.adhoc)
+    ? est.adhoc.filter(Boolean).map(a => ({ ...a }))
+    : (est.adhoc && typeof est.adhoc === 'object' ? Object.values(est.adhoc).filter(Boolean).map(a => ({ ...a })) : []);
+  const adhocCard = h('div', {});
+  const importeAdhoc = (a) => (Number(a.cantidad) || 0) * (Number(a.puSub) || 0);
+  const totalAdhoc = () => adhoc.reduce((s, a) => s + importeAdhoc(a), 0);
+
   // Tabla editable
   const totalsRow = h('tr', { style: { fontWeight: 600, background: 'var(--bg-2)' } });
   function recompute() {
@@ -113,6 +124,7 @@ export async function renderSubEstimacion({ params }) {
       const p = Number(ganador.precios?.[cs.conceptoId]) || 0;
       subtotal += cant * p;
     }
+    subtotal += totalAdhoc();
     const iva = estConIva ? subtotal * ivaPct : 0;
     const importe = subtotal + iva;
     totalsRow.innerHTML = '';
@@ -128,6 +140,7 @@ export async function renderSubEstimacion({ params }) {
     summaryNeto.textContent = money(importe - totalRetenido(importe));
     netoWrap.classList.toggle('hidden', retenciones.length === 0);
     renderRetenciones(importe);
+    renderAdhoc();
   }
 
   function subtotalActual() {
@@ -135,7 +148,133 @@ export async function renderSubEstimacion({ params }) {
     for (const cs of conceptosSub) {
       s += (Number(localAvances[cs.conceptoId]) || 0) * (Number(ganador.precios?.[cs.conceptoId]) || 0);
     }
-    return s;
+    return s + totalAdhoc();
+  }
+
+  // Lista de conceptos del catálogo a los que se puede imputar un ad-hoc.
+  // Se prioriza lo que ya está en el alcance del sub (lo más probable), y
+  // después el resto del catálogo por si el retrabajo pertenece a otra partida.
+  function opcionesImputacion() {
+    const enAlcance = [], resto = [];
+    const idsSub = new Set(conceptosSub.map(cs => cs.conceptoId));
+    for (const [id, c] of Object.entries(obra.catalogo?.conceptos || {})) {
+      if (c.tipo !== 'precio_unitario' || c.archivado) continue;
+      (idsSub.has(id) ? enAlcance : resto).push({ id, ...c });
+    }
+    const ord = (a, b) => (a.orden || 0) - (b.orden || 0);
+    return { enAlcance: enAlcance.sort(ord), resto: resto.sort(ord) };
+  }
+
+  function renderAdhoc() {
+    adhocCard.innerHTML = '';
+    adhocCard.appendChild(h('div', { class: 'row', style: { marginBottom: '6px' } }, [
+      h('span', { class: 'muted', style: { fontSize: '12px' } }, 'Conceptos extra (retrabajos, reparaciones — fuera del alcance original)'),
+      h('div', { style: { flex: 1 } }),
+      totalAdhoc() > 0 && h('span', { class: 'mono', style: { fontSize: '12px' } }, '+' + money(totalAdhoc())),
+      editable && h('button', { class: 'btn sm', style: { marginLeft: '8px' }, onClick: () => adhocDialog() }, '+ Concepto extra')
+    ]));
+    if (!adhoc.length) {
+      adhocCard.appendChild(h('div', { class: 'muted', style: { fontSize: '11px' } },
+        'Sin conceptos extra. Agrégalos si le debes al sub trabajo que no estaba en su alcance ni existe en el catálogo.'));
+      return;
+    }
+    adhoc.forEach((a, i) => {
+      const imputa = obra.catalogo?.conceptos?.[a.conceptoIdImputa];
+      adhocCard.appendChild(h('div', {
+        class: 'row',
+        style: { padding: '7px 0', borderTop: i ? '1px solid var(--border)' : 'none', fontSize: '12px', alignItems: 'flex-start', cursor: editable ? 'pointer' : 'default' },
+        onClick: editable ? () => adhocDialog(i) : null
+      }, [
+        h('div', { style: { flex: 1, minWidth: 0 } }, [
+          h('div', {}, h('b', {}, a.descripcion || 'Concepto extra')),
+          h('div', { class: 'muted', style: { fontSize: '11px' } },
+            `${num(a.cantidad, 2)} ${a.unidad || ''} × ${money(a.puSub)}`),
+          h('div', { style: { fontSize: '11px', marginTop: '2px' } }, imputa
+            ? h('span', { class: 'muted' }, ['carga a ', h('span', { class: 'mono' }, imputa.clave || ''), ' — ', (imputa.descripcion || '').slice(0, 60)])
+            : h('span', { class: 'warn' }, '⚠ sin concepto al cual cargarlo'))
+        ]),
+        h('span', { class: 'mono', style: { fontWeight: 600 } }, money(importeAdhoc(a))),
+        editable && h('button', {
+          class: 'btn sm danger ghost', style: { marginLeft: '8px' },
+          onClick: async (e) => { e.stopPropagation(); adhoc.splice(i, 1); await guardarAdhoc(); }
+        }, '✕')
+      ]));
+    });
+  }
+
+  async function guardarAdhoc() {
+    try {
+      await setSubEstimacionAdhoc(obraId, subId, eid, adhoc);
+      est.adhoc = adhoc;
+      recompute();
+    } catch (err) { toast('Error: ' + err.message, 'danger'); }
+  }
+
+  async function adhocDialog(idx) {
+    const cur = idx != null ? adhoc[idx] : null;
+    const desc = h('input', { placeholder: 'p. ej. Reparación de tubería dañada en eje C', value: cur?.descripcion || '' });
+    const unidad = h('input', { placeholder: 'pza, m, lote…', value: cur?.unidad || 'lote' });
+    const cant = h('input', { type: 'number', step: 'any', value: cur?.cantidad ?? 1 });
+    const pu = h('input', { type: 'number', step: '0.01', value: cur?.puSub ?? '' });
+    const notas = h('input', { placeholder: 'Motivo / a qué se debe (opcional)', value: cur?.notas || '' });
+
+    const { enAlcance, resto } = opcionesImputacion();
+    const sel = h('select', { style: { width: '100%' } }, [
+      h('option', { value: '' }, '— Elige el concepto al que se carga —'),
+      enAlcance.length && h('optgroup', { label: 'En el alcance de este subcontrato' },
+        enAlcance.map(c => h('option', { value: c.id }, `${c.clave || ''} — ${(c.descripcion || '').slice(0, 60)}`))),
+      resto.length && h('optgroup', { label: 'Resto del catálogo' },
+        resto.map(c => h('option', { value: c.id }, `${c.clave || ''} — ${(c.descripcion || '').slice(0, 60)}`)))
+    ]);
+    if (cur?.conceptoIdImputa) sel.value = cur.conceptoIdImputa;
+
+    const prev = h('div', { style: { fontSize: '12px', marginTop: '10px', paddingTop: '10px', borderTop: '1px solid var(--border)' } });
+    function refresh() {
+      const imp = (Number(cant.value) || 0) * (Number(pu.value) || 0);
+      prev.innerHTML = '';
+      prev.appendChild(h('div', {}, ['Importe: ', h('b', { class: 'mono' }, money(imp))]));
+    }
+    [cant, pu].forEach(el => el.addEventListener('input', refresh));
+    refresh();
+
+    const ok = await modal({
+      title: cur ? 'Editar concepto extra' : 'Agregar concepto extra',
+      confirmLabel: cur ? 'Guardar' : 'Agregar',
+      body: h('div', {}, [
+        h('p', { class: 'muted', style: { fontSize: '12px', marginTop: 0 } }, 'Trabajo que se le debe al sub pero que no estaba en su alcance ni existe en el catálogo: retrabajos, reparaciones, imprevistos. NO se agrega al catálogo de la obra — ese es el contrato con el cliente y no se toca.'),
+        h('div', { class: 'field' }, [h('label', {}, 'Descripción *'), desc]),
+        h('div', { class: 'grid-3', style: { marginTop: '10px' } }, [
+          h('div', { class: 'field' }, [h('label', {}, 'Unidad'), unidad]),
+          h('div', { class: 'field' }, [h('label', {}, 'Cantidad'), cant]),
+          h('div', { class: 'field' }, [h('label', {}, 'P.U. al sub'), pu])
+        ]),
+        h('div', { class: 'field', style: { marginTop: '12px' } }, [
+          h('label', {}, 'Se carga al concepto *'),
+          sel,
+          h('div', { class: 'muted', style: { fontSize: '11px', marginTop: '4px' } }, 'A qué concepto real de la obra pertenece este costo. Es lo que le permite al contador saber contra qué rubro cargarlo.')
+        ]),
+        h('div', { class: 'field', style: { marginTop: '10px' } }, [h('label', {}, 'Notas'), notas]),
+        prev
+      ]),
+      onConfirm: () => {
+        if (!desc.value.trim()) { toast('Ponle una descripción', 'warn'); return false; }
+        if (!sel.value) { toast('Elige a qué concepto se carga', 'warn'); return false; }
+        if (!((Number(cant.value) || 0) * (Number(pu.value) || 0) > 0)) { toast('Captura cantidad y precio', 'warn'); return false; }
+        return true;
+      }
+    });
+    if (!ok) return;
+    const item = {
+      id: cur?.id || ('ad' + Date.now().toString(36)),
+      descripcion: desc.value.trim(),
+      unidad: unidad.value.trim(),
+      cantidad: Number(cant.value) || 0,
+      puSub: Number(pu.value) || 0,
+      conceptoIdImputa: sel.value,
+      notas: notas.value.trim()
+    };
+    if (idx != null) adhoc[idx] = item; else adhoc.push(item);
+    await guardarAdhoc();
   }
   // Base de las retenciones: el importe bruto de la estimación (subtotal + IVA
   // si aplica). Es la misma cifra en la tarjeta, el diálogo de pago y el buzón.
@@ -303,6 +442,7 @@ export async function renderSubEstimacion({ params }) {
       h('div', { class: 'field' }, [ivaLabelNode, h('div', {}, summaryIva)]),
       h('div', { class: 'field' }, [importeLabelNode, h('div', {}, summaryImp)])
     ]),
+    h('div', { style: { marginTop: '14px', paddingTop: '12px', borderTop: '1px solid var(--border)' } }, adhocCard),
     h('div', { style: { marginTop: '14px', paddingTop: '12px', borderTop: '1px solid var(--border)' } }, retencionesCard),
     netoWrap,
     h('div', { class: 'row', style: { marginTop: '14px', paddingTop: '12px', borderTop: '1px solid var(--border)' } }, [
@@ -483,6 +623,7 @@ export async function renderSubEstimacion({ params }) {
       const puSub = Number(ganador.precios?.[cs.conceptoId]) || 0;
       subtotalCalc += cant * puSub;
     }
+    subtotalCalc += totalAdhoc();          // los retrabajos también se le pagan
     const ivaCalc = subtotalCalc * ivaPct;
     const importeCalc = subtotalCalc + ivaCalc;
 
@@ -649,13 +790,33 @@ export async function renderSubEstimacion({ params }) {
             subtotalCalcReal += importeRaw;
             desgloseRaw.push({ clave: cat.clave || '', descripcion: cat.descripcion || '', cantidad: cant, precioUnitario: puSub, importeRaw });
           }
+          // Los ad-hoc entran al desglose CARGADOS a su concepto real, que es lo
+          // que permite al contador saber contra qué rubro va el costo. Se marcan
+          // como extra y conservan su descripción propia para la trazabilidad.
+          for (const a of adhoc) {
+            const importeRaw = importeAdhoc(a);
+            if (importeRaw <= 0) continue;
+            const cat = conceptosAll[a.conceptoIdImputa];
+            subtotalCalcReal += importeRaw;
+            desgloseRaw.push({
+              clave: cat?.clave || '', descripcion: cat?.descripcion || '',
+              cantidad: Number(a.cantidad) || 0, precioUnitario: Number(a.puSub) || 0, importeRaw,
+              esExtra: true, descripcionExtra: a.descripcion || '', unidadExtra: a.unidad || '', notasExtra: a.notas || ''
+            });
+          }
           const factor = (subtotalCalcReal > 0 && subtotal > 0) ? (subtotal / subtotalCalcReal) : 1;
           const desglose = desgloseRaw.map(d => ({
             clave: d.clave,
             descripcion: d.descripcion,
             cantidad: d.cantidad,
             precioUnitario: d.precioUnitario,
-            importe: Number((d.importeRaw * factor).toFixed(2))
+            importe: Number((d.importeRaw * factor).toFixed(2)),
+            ...(d.esExtra ? {
+              esExtra: true,                    // retrabajo/reparación fuera del alcance
+              descripcionExtra: d.descripcionExtra,
+              unidadExtra: d.unidadExtra,
+              notasExtra: d.notasExtra
+            } : {})
           }));
 
           // Las retenciones se descuentan del pago: el gasto que ve el contador

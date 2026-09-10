@@ -960,6 +960,17 @@ export async function setSubEstimacionRetenciones(obraId, subId, estId, retencio
   await set(_ref(`obras/${obraId}/subcontratos/${subId}/estimaciones/${estId}/retenciones`), retenciones || []);
 }
 
+// Conceptos AD-HOC de una estimación al sub: retrabajos, reparaciones y demás
+// trabajo que se le debe al subcontratista pero que no estaba en su alcance ni
+// existe como tal en el catálogo OPUS. NO tocan el catálogo (el catálogo es el
+// contrato con el CLIENTE); viven solo en esta estimación. Cada uno se imputa a
+// un concepto real (`conceptoIdImputa`) para que su costo aterrice en algún
+// rubro de la obra y el contador sepa contra qué cargarlo.
+// Cada uno: { id, descripcion, unidad, cantidad, puSub, conceptoIdImputa, notas }
+export async function setSubEstimacionAdhoc(obraId, subId, estId, adhoc) {
+  await set(_ref(`obras/${obraId}/subcontratos/${subId}/estimaciones/${estId}/adhoc`), adhoc || []);
+}
+
 export async function cerrarSubEstimacion(obraId, subId, estId, uid) {
   await update(_ref(`obras/${obraId}/subcontratos/${subId}/estimaciones/${estId}`), {
     estado: 'cerrada', cerradaAt: Date.now(), cerradaPor: uid
