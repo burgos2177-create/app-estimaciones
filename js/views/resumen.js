@@ -191,7 +191,16 @@ async function draw(obraId, obra, estId) {
     ? h('button', { class: 'btn sm ghost', onClick: async () => { const ok = await editIvaDialog(obraId, estId, est); if (ok) renderResumen({ params: { id: obraId } }); } }, '✎ IVA')
     : null;
   const editAmortBtn = editable
-    ? h('button', { class: 'btn sm ghost', onClick: async () => { const ok = await editAmortDialog(obraId, estId, est, anticipoPct, subtotalEsta); if (ok) renderResumen({ params: { id: obraId } }); } }, '✎ Amortización')
+    ? h('button', { class: 'btn sm ghost', onClick: async () => {
+        // saldo + lo que YA amortiza esta estimación = lo que quedaría pendiente
+        // si esta no amortizara nada. Sobre eso se despeja la tasa de cierre.
+        const ok = await editAmortDialog(obraId, estId, est, anticipoPct, subtotalEsta, {
+          saldoPendienteSinEsta: saldoAnticipoPorAmortizar + amortizacionEsta,
+          anticipoBase: obra.integracion?.anticipo_base || 'subtotal',
+          ivaPct
+        });
+        if (ok) renderResumen({ params: { id: obraId } });
+      } }, '✎ Amortización')
     : null;
   // Trazabilidad del IVA: si ESTA estimación quedó en 16% auto pero OTRA se capturó
   // manual, avisa (fácil olvidar ajustarla y descuadrar el IVA acumulado).
@@ -355,10 +364,23 @@ function kvBig(label, val, kind) {
 // Amortización de anticipo pactada para ESTA estimación. Vacío = la del contrato.
 // Se guarda el porcentaje (no el monto) porque así sigue al subtotal si después
 // se ajustan generadores. Afecta solo a esta estimación; el default no se mueve.
-async function editAmortDialog(obraId, estId, est, anticipoPct, subtotalEsta) {
+async function editAmortDialog(obraId, estId, est, anticipoPct, subtotalEsta, cfg = {}) {
   const actual = (est.amortPct != null && est.amortPct !== '') ? Number(est.amortPct) : null;
+  // Con base 'total_c_iva' la tasa guardada se amplifica por (1+IVA) al aplicarse
+  // sobre el subtotal; hay que considerarlo para despejar la tasa exacta.
+  const factor = cfg.anticipoBase === 'total_c_iva' ? (1 + Number(cfg.ivaPct ?? 0.16)) : 1;
+  // Anticipo que quedaría pendiente si ESTA estimación no amortizara nada.
+  const pendienteSinEsta = Math.max(0, Number(cfg.saldoPendienteSinEsta) || 0);
+  // Tasa que deja el anticipo exactamente en cero. Se topa en 100%: no se puede
+  // amortizar más de lo estimado en el periodo.
+  const pctExacto = subtotalEsta > 0 ? pendienteSinEsta / (subtotalEsta * factor) : 0;
+  const pctIgualar = Math.min(1, pctExacto);
+  const alcanza = pctExacto <= 1 + 1e-9;
+  const faltante = Math.max(0, pendienteSinEsta - subtotalEsta * factor);
+
   const rAuto = h('input', { type: 'radio', name: 'amort' });
   const rManual = h('input', { type: 'radio', name: 'amort' });
+  const rIgualar = h('input', { type: 'radio', name: 'amort', disabled: !(pendienteSinEsta > 0 && subtotalEsta > 0) });
   const pctIn = h('input', {
     type: 'number', step: '0.01', min: '0', max: '100',
     value: actual != null ? (actual * 100).toFixed(2) : (anticipoPct * 100).toFixed(2),
@@ -367,19 +389,33 @@ async function editAmortDialog(obraId, estId, est, anticipoPct, subtotalEsta) {
   rAuto.checked = actual == null; rManual.checked = actual != null;
 
   const preview = h('div', { style: { fontSize: '12px', marginTop: '10px', paddingTop: '10px', borderTop: '1px solid var(--border)' } });
+  function tasaElegida() {
+    if (rIgualar.checked) return pctIgualar;
+    if (rManual.checked) return (Number(pctIn.value) || 0) / 100;
+    return anticipoPct;
+  }
   function refresh() {
     pctIn.disabled = !rManual.checked;
-    const p = rManual.checked ? (Number(pctIn.value) || 0) / 100 : anticipoPct;
+    const p = tasaElegida();
+    const amort = subtotalEsta * p * factor;
+    const quedaria = Math.max(0, pendienteSinEsta - amort);
     preview.innerHTML = '';
     preview.appendChild(h('div', {}, [
       'Sobre el subtotal de esta estimación (', h('b', { class: 'mono' }, money(subtotalEsta)), ') se amortizarían ',
-      h('b', { class: 'mono warn' }, money(subtotalEsta * p)), '.'
+      h('b', { class: 'mono warn' }, money(amort)), '.'
     ]));
     preview.appendChild(h('div', { class: 'muted', style: { marginTop: '4px' } }, [
-      'Neto a cobrar de esta estimación (sin IVA): ', h('b', { class: 'mono' }, money(subtotalEsta * (1 - p)))
+      'Neto a cobrar de esta estimación (sin IVA): ', h('b', { class: 'mono' }, money(subtotalEsta - amort))
     ]));
+    if (pendienteSinEsta > 0) {
+      preview.appendChild(h('div', { style: { marginTop: '6px' } }, [
+        'Anticipo que quedaría pendiente: ',
+        h('b', { class: 'mono', style: { color: quedaria < 0.005 ? 'var(--ok)' : 'var(--warn)' } }, money(quedaria)),
+        quedaria < 0.005 ? h('span', { class: 'tag ok', style: { marginLeft: '6px' } }, '✓ a mano') : null
+      ]));
+    }
   }
-  [rAuto, rManual].forEach(r => r.addEventListener('change', refresh));
+  [rAuto, rManual, rIgualar].forEach(r => r.addEventListener('change', refresh));
   pctIn.addEventListener('input', refresh);
   refresh();
 
@@ -390,6 +426,22 @@ async function editAmortDialog(obraId, estId, est, anticipoPct, subtotalEsta) {
       h('label', { class: 'row' }, [rAuto, h('span', {}, `Tasa del contrato (${pct(anticipoPct)})`)]),
       h('label', { class: 'row', style: { marginTop: '6px' } }, [rManual, h('span', {}, 'Amortización pactada para esta estimación')]),
       h('div', { class: 'field', style: { marginTop: '8px' } }, [h('label', {}, 'Porcentaje (%)'), pctIn]),
+      // Opción de cierre: agota el anticipo en este periodo para quedar en ceros.
+      h('label', { class: 'row', style: { marginTop: '10px', paddingTop: '10px', borderTop: '1px solid var(--border)', alignItems: 'flex-start' } }, [
+        rIgualar,
+        h('div', {}, [
+          h('div', {}, [
+            h('b', {}, 'Agotar el anticipo pendiente'),
+            pendienteSinEsta > 0 && h('span', { class: 'muted' }, ` — quedan ${money(pendienteSinEsta)}`)
+          ]),
+          h('div', { class: 'muted', style: { fontSize: '11px', marginTop: '2px' } },
+            pendienteSinEsta <= 0
+              ? 'El anticipo ya está amortizado por completo.'
+              : (alcanza
+                ? `Amortiza al ${(pctIgualar * 100).toFixed(4)} % para dejarlo exactamente en $0.00. Para el cierre de la obra.`
+                : `Ni amortizando el 100 % alcanza: quedarían ${money(faltante)} para las siguientes estimaciones.`))
+        ])
+      ]),
       preview
     ]),
     confirmLabel: 'Guardar',
@@ -399,7 +451,12 @@ async function editAmortDialog(obraId, estId, est, anticipoPct, subtotalEsta) {
         if (isNaN(v) || v < 0 || v > 100) { toast('Captura un porcentaje entre 0 y 100', 'warn'); return false; }
       }
       try {
-        await setEstimacionAmortPct(obraId, estId, rManual.checked ? (Number(pctIn.value) || 0) / 100 : null);
+        // Al agotar se guarda la fracción EXACTA (no la redondeada a dos decimales),
+        // que es lo que hace que el saldo caiga en $0.00 justo y no en centavos.
+        const nueva = rIgualar.checked ? pctIgualar
+          : rManual.checked ? (Number(pctIn.value) || 0) / 100
+          : null;
+        await setEstimacionAmortPct(obraId, estId, nueva);
         toast('Amortización actualizada', 'ok');
         return true;
       } catch (err) { toast('Error: ' + err.message, 'danger'); return false; }
