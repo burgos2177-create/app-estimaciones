@@ -9,8 +9,9 @@ import { h, mount, toast, modal } from '../util/dom.js';
 import { renderShell } from './shell.js';
 import { state } from '../state/store.js';
 import { navigate } from '../state/router.js';
-import { loadObra, rread } from '../services/db.js';
-import { dateMx } from '../util/format.js';
+import { loadObra, rread, getContratoVigente } from '../services/db.js';
+import { dateMx, money } from '../util/format.js';
+import { buildResumenData } from '../services/export.js';
 import {
   CLS, loadBitacora, guardarBorrador, borrarNota, setBitacoraMeta,
   asentarNota, crearNotaAsentada, anularNota, agregarFotosNota
@@ -70,7 +71,34 @@ async function agregarFotosFlow(n) {
   input.click();
 }
 
-const V = { obraId: null, obra: null, meta: null, notas: [], filtro: 'TODAS', q: '', draft: [] };
+const V = { obraId: null, obra: null, meta: null, notas: [], filtro: 'TODAS', q: '', draft: [], pond: null };
+
+// Avance PONDERADO vigente, tomado del MISMO cálculo que muestra el RESUMEN
+// (buildResumenData.avPond), para que las dos pantallas no den números distintos
+// con el mismo nombre. Como se calcula sobre el catálogo vigente, ya trae dentro
+// las órdenes de cambio aplicadas.
+//
+// Es un dato DERIVADO y de solo lectura: nunca se guarda en una nota ni recalcula
+// el % de las notas ya asentadas, que son registro inalterable.
+function calcPonderado(obra, contratoPub) {
+  const ests = obra?.estimaciones || {};
+  const ids = Object.keys(ests);
+  if (!ids.length) return null;
+  const ctx = ids.sort((a, b) => (ests[a].numero || 0) - (ests[b].numero || 0)).pop();
+  try {
+    const d = buildResumenData(obra, ctx);
+    const meta = obra.meta || {};
+    return {
+      pct: d.avPond,
+      ejecutado: d.importeAcumEjec,
+      contratoCIVA: Number(meta.montoContratoCIVA) || 0,
+      conOC: (contratoPub?.ordenesCambio?.count || 0) > 0,
+      netoOC: Number(contratoPub?.ordenesCambio?.netoAcumCIVA) || 0,
+      estimNumero: ests[ctx]?.numero || null
+    };
+  } catch (err) { console.error('No se pudo calcular el ponderado', err); return null; }
+}
+const fmtPond = (p) => (p == null ? '—' : (p * 100).toFixed(2).replace('.', ',') + '%');
 const nid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 const fmtDT = (iso) => { const d = new Date(iso); return d.toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: 'numeric' }) + ' · ' + d.toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' }); };
 const folioStr = (n) => n > 0 ? 'NOTA ' + String(n).padStart(3, '0') : 'BORRADOR';
@@ -92,6 +120,10 @@ export async function renderBitacora({ params }) {
   if (!obra) { renderShell(crumbs(obraId), h('div', { class: 'empty' }, 'Obra no encontrada.')); return; }
   const bit = await loadBitacora(obraId);
   V.meta = bit.meta; V.notas = bit.notas;
+  // Contrato publicado: solo para saber si hay OC aplicadas y cuánto movieron.
+  let contratoPub = null;
+  try { contratoPub = await getContratoVigente(obraId); } catch {}
+  V.pond = calcPonderado(obra, contratoPub);
   if (!bit.meta) return renderApertura();
   renderLista();
 }
@@ -176,10 +208,22 @@ function renderLista() {
       h('span', { class: cerrada ? 'tag danger' : 'tag ok' }, cerrada ? 'Bitácora cerrada' : 'Bitácora abierta')
     ]),
 
-    h('div', { class: 'grid-4', style: { marginBottom: '14px' } }, [
-      stat(asent, 'Notas asentadas'), stat(lastAv != null ? lastAv + '%' : '—', 'Último avance físico'),
-      stat(fotos, 'Fotografías'), stat(`${anul}${bor ? ' / ' + bor : ''}`, `Anuladas${bor ? ' / borrador' : ''}`)
+    // El físico manual y el ponderado financiero son datos DISTINTOS: el primero
+    // es el criterio del residente en campo, el segundo sale de las estimaciones
+    // y ya trae las órdenes de cambio. Se muestran los dos, no uno en lugar del otro.
+    h('div', { class: 'grid-4', style: { marginBottom: '10px' } }, [
+      stat(asent, 'Notas asentadas'),
+      stat(lastAv != null ? lastAv + '%' : '—', 'Último avance físico'),
+      stat(fmtPond(V.pond?.pct), 'Avance ponderado (estim. y OC)'),
+      stat(fotos, 'Fotografías'),
+      stat(`${anul}${bor ? ' / ' + bor : ''}`, `Anuladas${bor ? ' / borrador' : ''}`)
     ]),
+    V.pond ? h('div', { class: 'muted', style: { fontSize: '11px', margin: '-6px 0 12px' } }, [
+      'Ponderado calculado sobre lo estimado hasta la estimación #', String(V.pond.estimNumero || '?'),
+      ', contra el contrato vigente de ', h('b', {}, money(V.pond.contratoCIVA)),
+      V.pond.conOC ? h('span', {}, [' (ya incluye ', h('b', {}, (V.pond.netoOC >= 0 ? '+' : '−') + money(Math.abs(V.pond.netoOC))), ' de órdenes de cambio)']) : ' (sin órdenes de cambio)',
+      '. Es informativo: no modifica el avance físico de ninguna nota.'
+    ]) : null,
     lastAv != null ? h('div', { class: 'bit-avbar', style: { marginBottom: '16px' } }, h('i', { style: { width: Math.min(100, lastAv) + '%' } })) : null,
 
     h('div', { class: 'row', style: { marginBottom: '10px' } }, [
@@ -431,7 +475,30 @@ function openEditor(nota, opts) {
     ]),
     h('div', { class: 'field' }, [h('label', {}, 'Responsabilidad (si la hubiere)'), input('e_resp', d.responsable)]),
     h('div', { class: 'grid-3' }, [
-      h('div', { class: 'field' }, [h('label', {}, 'Avance físico %'), input('e_av', d.avance != null ? d.avance : '', { type: 'number', min: '0', max: '100', placeholder: '—' })]),
+      // El avance sigue siendo del residente: el ponderado solo se SUGIERE.
+      // Nunca se autocompleta, porque el físico y el financiero pueden separarse
+      // legítimamente (material en sitio sin instalar, obra hecha sin estimar).
+      h('div', { class: 'field' }, [
+        h('label', {}, 'Avance físico %'),
+        input('e_av', d.avance != null ? d.avance : '', {
+          type: 'number', min: '0', max: '100',
+          placeholder: V.pond ? (V.pond.pct * 100).toFixed(2) : '—'
+        }),
+        V.pond ? h('div', { style: { marginTop: '4px' } }, [
+          h('button', {
+            type: 'button', class: 'btn sm ghost',
+            title: 'Copiar el avance ponderado que calculan las estimaciones',
+            onClick: () => {
+              const el = document.getElementById('e_av');
+              if (el) { el.value = (V.pond.pct * 100).toFixed(2); el.focus(); }
+            }
+          }, `Usar ponderado (${fmtPond(V.pond.pct)})`)
+        ]) : null,
+        V.pond ? h('div', { class: 'muted', style: { fontSize: '10.5px', marginTop: '4px', lineHeight: 1.45 } },
+          `Base: ${money(V.pond.contratoCIVA)} de contrato vigente` +
+          (V.pond.conOC ? ` (incluye ${V.pond.netoOC >= 0 ? '+' : '−'}${money(Math.abs(V.pond.netoOC))} de órdenes de cambio)` : ' (sin órdenes de cambio)')
+        ) : null
+      ]),
       h('div', { class: 'field' }, [h('label', {}, 'Personal en obra'), input('e_pers', d.personal, { placeholder: 'p. ej. 8 (2 alb, 4 ayud…)' })]),
       h('div', { class: 'field' }, [h('label', {}, 'Clima'), input('e_clima', d.clima, { placeholder: 'Despejado / lluvia…' })])
     ]),
