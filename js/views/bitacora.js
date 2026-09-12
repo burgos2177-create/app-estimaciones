@@ -267,7 +267,13 @@ function periodoRango(clave) {
     }
     case 'mes': return [startOfDay(new Date(now.getFullYear(), now.getMonth(), 1)), endOfDay(now)];
     case 'mes_ant': return [startOfDay(new Date(now.getFullYear(), now.getMonth() - 1, 1)), endOfDay(new Date(now.getFullYear(), now.getMonth(), 0))];
-    case 'todo': return [startOfDay(new Date(2000, 0, 1)), endOfDay(now)];
+    // "Toda la obra" arranca en la primera nota asentada, no en una fecha
+    // centinela: el informe imprime el rango y salía "01 de enero de 2000".
+    case 'todo': {
+      const fechas = V.notas.filter(n => n.estado === 'asentada').map(n => new Date(n.fecha)).filter(d => !isNaN(d));
+      const ini = fechas.length ? new Date(Math.min(...fechas)) : now;
+      return [startOfDay(ini), endOfDay(now)];
+    }
     default: return [monThis, endOfDay(now)];
   }
 }
@@ -305,7 +311,18 @@ function renderInforme(notas, a, b, opt) {
   const p = V.obra.meta || {};
   const perLabel = (PERIODOS.find(x => x[0] === opt.clave) || ['', 'Personalizado'])[1];
   const avNotes = notas.filter(n => n.avance != null);
-  const avIni = avNotes.length ? avNotes[0].avance : null, avFin = avNotes.length ? avNotes[avNotes.length - 1].avance : null;
+  const avFin = avNotes.length ? avNotes[avNotes.length - 1].avance : null;
+  // La base del lapso es el avance vigente ANTES de que empiece el periodo, no
+  // el de la primera nota de adentro: si se toma esa, su propio avance queda
+  // fuera de la cuenta y el progreso sale corto (en toda la obra daba +88.56%
+  // en vez de +89.56%, porque descontaba el 1% de la nota de apertura).
+  const previas = V.notas
+    .filter(n => n.estado === 'asentada' && n.avance != null && new Date(n.fecha) < a)
+    .sort((x, y) => new Date(x.fecha) - new Date(y.fecha));
+  const avBase = previas.length ? previas[previas.length - 1].avance : 0;
+  const delta = avFin != null ? avFin - avBase : null;
+  const fmtAv = (v) => (Math.round(v * 100) / 100).toString().replace('.', ',');
+  const deltaTxt = delta == null ? '—' : (delta >= 0 ? '+' : '−') + fmtAv(Math.abs(delta)) + '%';
   const totalFotos = notas.reduce((s, n) => s + (opt.withFotos ? (n.fotos || []).length : 0), 0);
   const porCls = {}; notas.forEach(n => porCls[n.cls] = (porCls[n.cls] || 0) + 1);
   const esc = (s) => (s || '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -373,8 +390,8 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;c
   </div></div>
   <div class="bk"><h3>Resumen del periodo</h3><div class="st">
     <div class="s"><b>${notas.length}</b><span>Notas asentadas</span></div>
-    <div class="s"><b>${avFin != null ? avFin + '%' : '—'}</b><span>Avance al cierre</span></div>
-    <div class="s"><b>${avIni != null && avFin != null ? '+' + (avFin - avIni) + '%' : '—'}</b><span>Progreso en el lapso</span></div>
+    <div class="s"><b>${avFin != null ? fmtAv(avFin) + '%' : '—'}</b><span>Avance al cierre</span></div>
+    <div class="s"><b>${deltaTxt}</b><span>Progreso en el lapso</span><span style="font-size:9px;color:#98a2b3">desde ${fmtAv(avBase)}%</span></div>
     <div class="s"><b>${totalFotos}</b><span>Fotografías</span></div>
   </div><div style="margin-top:8px">${clsResumen}</div></div>
   <div class="se">Notas de bitácora del periodo</div>
