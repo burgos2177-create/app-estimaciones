@@ -171,7 +171,12 @@ export function exportF1Pdf(obra) {
   const ejecMap = buildExecMap(obra.catalogo?.conceptos || {}, obra.generadores || {}, obra.avances || {}, obra.catalogo?.migrationKeyMap, obra.estimaciones || {});
 
   const { jsPDF } = window.jspdf;
-  const doc = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'letter' });
+  // El concentrado gana una columna por estimación, así que en una obra larga ya
+  // no cabe en carta: los importes se parten en varias líneas y la tabla queda
+  // ilegible. El papel crece con el número de estimaciones.
+  const nEst = estims.length;
+  const formato = nEst <= 6 ? 'letter' : (nEst <= 12 ? 'legal' : 'a3');
+  const doc = new jsPDF({ orientation: 'landscape', unit: 'pt', format: formato });
 
   drawObraHeader(doc, m, 'F-1 / CONCENTRADO DE OBRA');
 
@@ -216,15 +221,25 @@ export function exportF1Pdf(obra) {
     '', fmtPct(avPond), '', '', money(totEjec), money(totRest)
   ]];
 
+  // Ancho de la descripción: lo que sobre después de dejarle a cada columna
+  // numérica lo que de verdad necesita un importe. Sin esto, las numéricas se
+  // comprimen hasta partir "$931,756.79" en tres renglones.
+  const anchoPag = doc.internal.pageSize.width;
+  const colsNum = 3 + nEst + 6;                 // cant, P.U., total + estims + 6 finales
+  const fuente = nEst > 12 ? 6 : 7;
+  const minNum = fuente === 6 ? 36 : 42;        // lo mínimo para un importe sin partirse
+  const libre = anchoPag - 60 - 50 - 28;        // menos márgenes, clave y unidad
+  const descW = Math.max(90, Math.min(200, libre - colsNum * minNum));
+
   doc.autoTable({
     startY: 165,
     head, body: body.map(r => r.cells), foot,
-    styles: { font: 'helvetica', fontSize: 7, cellPadding: 3, lineColor: [200, 210, 220], lineWidth: 0.3 },
-    headStyles: { fillColor: [40, 50, 65], textColor: 230, fontStyle: 'bold', fontSize: 7 },
+    styles: { font: 'helvetica', fontSize: fuente, cellPadding: 3, lineColor: [200, 210, 220], lineWidth: 0.3 },
+    headStyles: { fillColor: [40, 50, 65], textColor: 230, fontStyle: 'bold', fontSize: fuente },
     footStyles: { fillColor: [240, 245, 250], textColor: 30, fontStyle: 'bold' },
     columnStyles: {
       0: { cellWidth: 50, font: 'courier' },
-      1: { cellWidth: 200 },
+      1: { cellWidth: descW },
       2: { cellWidth: 28 },
       3: { halign: 'right' },
       4: { halign: 'right' }, 5: { halign: 'right' }

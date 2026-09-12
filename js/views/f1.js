@@ -3,7 +3,7 @@
 // con la cantidad ejecutada en esa estim., total ejecutado, % avance, % concepto del PPTO,
 // % ponderado, importe a cobrar acumulado, restante. Fila final: totales y % avance global.
 
-import { h } from '../util/dom.js';
+import { h, toast } from '../util/dom.js';
 import { renderShell } from './shell.js';
 import { loadObra, getConceptoById, resolveConceptoKeyLocal, setAvanceObra } from '../services/db.js';
 import { money, num, num0, pct } from '../util/format.js';
@@ -165,8 +165,21 @@ export async function renderF1({ params }) {
       h('h1', { style: { margin: 0 } }, 'F-1 / Concentrado'),
       h('div', { class: 'muted' }, m.nombre || ''),
       h('div', { style: { flex: 1 } }),
-      h('button', { class: 'btn', onClick: () => exportF1Xlsx(obra) }, '⬇ XLSX'),
-      h('button', { class: 'btn primary', onClick: () => exportF1Pdf(obra) }, '⬇ PDF')
+      // Con try/catch: sin él, si el export truena no pasa NADA visible y parece
+      // que el botón no sirve, sin manera de saber por qué.
+      h('button', { class: 'btn', onClick: () => {
+        try { exportF1Xlsx(obra); } catch (err) { console.error(err); toast('No se pudo generar el XLSX: ' + err.message, 'danger'); }
+      } }, '⬇ XLSX'),
+      h('button', { class: 'btn primary', onClick: (e) => {
+        const btn = e.currentTarget, prev = btn.textContent;
+        btn.disabled = true; btn.textContent = '⏳ Generando…';
+        // Cede un frame para que se pinte el estado antes de bloquear con el PDF.
+        setTimeout(() => {
+          try { exportF1Pdf(obra); }
+          catch (err) { console.error(err); toast('No se pudo generar el PDF: ' + err.message, 'danger'); }
+          finally { btn.disabled = false; btn.textContent = prev; }
+        }, 30);
+      } }, '⬇ PDF')
     ]),
     summary,
     // Contenedor con scroll propio (H y V) y altura acotada: así el thead sticky
