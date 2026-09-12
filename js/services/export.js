@@ -1401,25 +1401,26 @@ export function exportOrdenCambioPdf(obra, oc) {
   const colStyles = { 0: { cellWidth: 62 }, 2: { cellWidth: 32, halign: 'center' }, 3: { halign: 'right', cellWidth: 58 }, 4: { halign: 'right', cellWidth: 68 }, 5: { halign: 'right', cellWidth: 76 } };
   const tblCommon = { styles: { font: 'helvetica', fontSize: 8, cellPadding: 3, lineColor: [220, 226, 234], lineWidth: 0.3 }, columnStyles: colStyles, margin: { left: 30, right: 30, bottom: 55 }, didDrawPage: (d) => drawFooter(doc, d, m) };
 
-  if (adit.length) {
-    doc.setFont('helvetica', 'bold'); doc.setFontSize(10); doc.setTextColor(30, 140, 90);
-    doc.text('CONCEPTOS ADITIVOS  (+)', 30, y);
-    doc.autoTable({ ...tblCommon, startY: y + 6, head, body: adit,
-      headStyles: { fillColor: BRAND.cyan, textColor: 255, fontStyle: 'bold' },
-      foot: [[{ content: 'Subtotal aditivo', colSpan: 5, styles: { halign: 'right', fontStyle: 'bold' } }, { content: money(sumAdit), styles: { halign: 'right', fontStyle: 'bold' } }]],
-      footStyles: { fillColor: [235, 245, 250], textColor: 30 } });
-    y = doc.lastAutoTable.finalY + 18;
-  }
-  if (deduct.length) {
+  // Una sección de la OC. Extraído a función para que el ORDEN en que se dibujan
+  // sea explícito y no dependa de en qué orden quedaron los bloques.
+  const seccion = (titulo, titColor, filas, headFill, footLabel, footVal, footFill) => {
+    if (!filas.length) return;
     if (y > 640) { doc.addPage(); y = 60; }
-    doc.setFont('helvetica', 'bold'); doc.setFontSize(10); doc.setTextColor(180, 70, 60);
-    doc.text('CONCEPTOS DEDUCTIVOS  (−)', 30, y);
-    doc.autoTable({ ...tblCommon, startY: y + 6, head, body: deduct,
-      headStyles: { fillColor: [120, 90, 90], textColor: 255, fontStyle: 'bold' },
-      foot: [[{ content: 'Subtotal deductivo', colSpan: 5, styles: { halign: 'right', fontStyle: 'bold' } }, { content: '−' + money(sumDeduct), styles: { halign: 'right', fontStyle: 'bold' } }]],
-      footStyles: { fillColor: [250, 240, 238], textColor: 30 } });
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(10); doc.setTextColor(...titColor);
+    doc.text(titulo, 30, y);
+    doc.autoTable({ ...tblCommon, startY: y + 6, head, body: filas,
+      headStyles: { fillColor: headFill, textColor: 255, fontStyle: 'bold' },
+      foot: [[{ content: footLabel, colSpan: 5, styles: { halign: 'right', fontStyle: 'bold' } }, { content: footVal, styles: { halign: 'right', fontStyle: 'bold' } }]],
+      footStyles: { fillColor: footFill, textColor: 30 } });
     y = doc.lastAutoTable.finalY + 18;
-  }
+  };
+
+  // DEDUCTIVOS primero, luego aditivos: el cliente lee antes lo que se le resta
+  // y después lo que se agrega. Al revés, la orden parece solo un encarecimiento.
+  seccion('CONCEPTOS DEDUCTIVOS  (−)', [180, 70, 60], deduct, [120, 90, 90],
+    'Subtotal deductivo', '−' + money(sumDeduct), [250, 240, 238]);
+  seccion('CONCEPTOS ADITIVOS  (+)', [30, 140, 90], adit, BRAND.cyan,
+    'Subtotal aditivo', money(sumAdit), [235, 245, 250]);
 
   // Resumen de montos
   const netoSub = sumAdit - sumDeduct;
